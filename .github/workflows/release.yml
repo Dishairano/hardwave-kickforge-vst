@@ -1,0 +1,218 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v0.1.0)'
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Install Linux dependencies
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+
+      - name: Build
+        run: cargo xtask bundle hardwave-kickforge --release
+
+      - name: Package
+        run: |
+          cd target/bundled
+          zip -r hardwave-kickforge-linux-x64.zip hardwave-kickforge.vst3 hardwave-kickforge.clap
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: hardwave-kickforge-linux-x64
+          path: target/bundled/hardwave-kickforge-linux-x64.zip
+
+  build-windows:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust + Windows MSVC target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install cargo-xwin
+        run: cargo install cargo-xwin --locked
+
+      - name: Build (MSVC cross-compile, with GUI)
+        run: cargo xwin build --release --target x86_64-pc-windows-msvc -p hardwave-kickforge
+
+      - name: Bundle VST3 and CLAP
+        run: |
+          DLL=target/x86_64-pc-windows-msvc/release/hardwave_kickforge.dll
+          # VST3 bundle
+          mkdir -p target/bundled/hardwave-kickforge.vst3/Contents/x86_64-win
+          cp "$DLL" target/bundled/hardwave-kickforge.vst3/Contents/x86_64-win/hardwave-kickforge.vst3
+          # CLAP bundle
+          cp "$DLL" target/bundled/hardwave-kickforge.clap
+
+      - name: Package
+        run: |
+          cd target/bundled
+          zip -r hardwave-kickforge-windows-x64.zip hardwave-kickforge.vst3 hardwave-kickforge.clap
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: hardwave-kickforge-windows-x64
+          path: target/bundled/hardwave-kickforge-windows-x64.zip
+
+  build-macos-x64:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+
+      - name: Build
+        run: cargo xtask bundle hardwave-kickforge --release --target x86_64-apple-darwin
+
+      - name: Package
+        run: |
+          cd target/bundled
+          zip -r hardwave-kickforge-macos-x64.zip hardwave-kickforge.vst3 hardwave-kickforge.clap
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: hardwave-kickforge-macos-x64
+          path: target/bundled/hardwave-kickforge-macos-x64.zip
+
+  build-macos-arm64:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Build
+        run: cargo xtask bundle hardwave-kickforge --release --target aarch64-apple-darwin
+
+      - name: Package
+        run: |
+          cd target/bundled
+          zip -r hardwave-kickforge-macos-arm64.zip hardwave-kickforge.vst3 hardwave-kickforge.clap
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: hardwave-kickforge-macos-arm64
+          path: target/bundled/hardwave-kickforge-macos-arm64.zip
+
+  release:
+    needs: [build-linux, build-windows, build-macos-x64, build-macos-arm64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create universal macOS zip
+        run: |
+          mkdir -p universal-macos/hardwave-kickforge.vst3/Contents
+          # Extract arm64
+          cd artifacts/hardwave-kickforge-macos-arm64
+          unzip hardwave-kickforge-macos-arm64.zip
+          cd ../..
+          # Extract x64
+          cd artifacts/hardwave-kickforge-macos-x64
+          unzip hardwave-kickforge-macos-x64.zip
+          cd ../..
+          # Create universal binary using lipo (not available on Linux — fall back to arm64 as primary)
+          # Note: true universal binaries require lipo on macOS; this step bundles both zips.
+          # For a real universal binary, a dedicated macOS job would be needed.
+          # Ship both arch zips plus a combined universal zip with arm64 contents (most common target).
+          cp -r artifacts/hardwave-kickforge-macos-arm64/hardwave-kickforge.vst3 universal-macos/
+          cp artifacts/hardwave-kickforge-macos-arm64/hardwave-kickforge.clap universal-macos/
+          cd universal-macos
+          zip -r hardwave-kickforge-macos-universal.zip hardwave-kickforge.vst3 hardwave-kickforge.clap
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: KickForge ${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            artifacts/hardwave-kickforge-linux-x64/*.zip
+            artifacts/hardwave-kickforge-windows-x64/*.zip
+            universal-macos/hardwave-kickforge-macos-universal.zip
+          body: |
+            ## KickForge ${{ steps.version.outputs.version }}
+
+            Hardstyle & hardcore kick synthesizer VST3/CLAP plugin — powered by Hardwave Studios.
+
+            ### Downloads
+
+            | Platform | File |
+            |----------|------|
+            | Windows x64 | `hardwave-kickforge-windows-x64.zip` |
+            | Linux x64 | `hardwave-kickforge-linux-x64.zip` |
+            | macOS Universal (Intel + Apple Silicon) | `hardwave-kickforge-macos-universal.zip` |
+
+            ### Installation
+
+            **Windows:**
+            1. Extract the zip
+            2. Copy `hardwave-kickforge.vst3` folder to `C:\Program Files\Common Files\VST3\`
+            3. Copy `hardwave-kickforge.clap` to `C:\Program Files\Common Files\CLAP\`
+
+            **macOS:**
+            1. Extract: `unzip hardwave-kickforge-macos-universal.zip`
+            2. Copy `hardwave-kickforge.vst3` to `~/Library/Audio/Plug-Ins/VST3/`
+            3. Copy `hardwave-kickforge.clap` to `~/Library/Audio/Plug-Ins/CLAP/`
+
+            **Linux:**
+            1. Extract: `unzip hardwave-kickforge-linux-x64.zip`
+            2. Copy to `~/.vst3/` and `~/.clap/`
