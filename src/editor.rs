@@ -78,21 +78,42 @@ impl raw_window_handle::HasDisplayHandle for RwhWrapper {
 /// Build a map of camelCase param keys to ParamPtr for GuiContext param setting.
 fn build_param_map(params: &KickForgeParams) -> HashMap<String, nih_plug::prelude::ParamPtr> {
     let mut map = HashMap::new();
+
+    // Click layer
     map.insert("clickEnabled".into(), params.click_enabled.as_ptr());
+    map.insert("clickType".into(), params.click_type.as_ptr());
     map.insert("clickVolume".into(), params.click_volume.as_ptr());
     map.insert("clickPitch".into(), params.click_pitch.as_ptr());
     map.insert("clickDecay".into(), params.click_decay.as_ptr());
+    map.insert("clickFilterFreq".into(), params.click_filter_freq.as_ptr());
+
+    // Body layer
     map.insert("bodyPitchStart".into(), params.body_pitch_start.as_ptr());
     map.insert("bodyPitchEnd".into(), params.body_pitch_end.as_ptr());
     map.insert("bodyPitchDecay".into(), params.body_pitch_decay.as_ptr());
+    map.insert("bodyPitchCurve".into(), params.body_pitch_curve.as_ptr());
+    map.insert("bodyWaveform".into(), params.body_waveform.as_ptr());
     map.insert("bodyDrive".into(), params.body_drive.as_ptr());
+    map.insert("bodyDistortionType".into(), params.body_distortion_type.as_ptr());
+    map.insert("bodyDecay".into(), params.body_decay.as_ptr());
     map.insert("bodyVolume".into(), params.body_volume.as_ptr());
+    map.insert("bodyTone".into(), params.body_tone.as_ptr());
+    map.insert("bodyResonance".into(), params.body_resonance.as_ptr());
+
+    // Sub layer
     map.insert("subEnabled".into(), params.sub_enabled.as_ptr());
     map.insert("subFrequency".into(), params.sub_frequency.as_ptr());
     map.insert("subVolume".into(), params.sub_volume.as_ptr());
     map.insert("subDecay".into(), params.sub_decay.as_ptr());
+
+    // Master
     map.insert("masterVolume".into(), params.master_volume.as_ptr());
     map.insert("masterTuning".into(), params.master_tuning.as_ptr());
+    map.insert("masterLimiter".into(), params.master_limiter.as_ptr());
+    map.insert("masterLow".into(), params.master_low.as_ptr());
+    map.insert("masterMid".into(), params.master_mid.as_ptr());
+    map.insert("masterHigh".into(), params.master_high.as_ptr());
+
     map
 }
 
