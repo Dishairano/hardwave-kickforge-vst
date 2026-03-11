@@ -3,7 +3,7 @@ members = ["xtask"]
 
 [package]
 name = "hardwave-kickforge"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 license = "Proprietary"
 description = "KickForge — hardstyle & hardcore kick synthesizer VST3/CLAP plugin by Hardwave Studios"
@@ -12,7 +12,7 @@ description = "KickForge — hardstyle & hardcore kick synthesizer VST3/CLAP plu
 crate-type = ["cdylib"]
 
 [features]
-default = []
+default = ["gui"]
 gui = ["dep:wry"]
 
 [dependencies]
