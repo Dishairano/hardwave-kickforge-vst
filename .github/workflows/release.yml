@@ -43,35 +43,24 @@ jobs:
           path: target/bundled/hardwave-kickforge-linux-x64.zip
 
   build-windows:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust + Windows MSVC target
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
 
-      - name: Install cargo-xwin
-        run: cargo install cargo-xwin --locked
-
-      - name: Build (MSVC cross-compile, with GUI)
-        run: cargo xwin build --release --target x86_64-pc-windows-msvc -p hardwave-kickforge
-
-      - name: Bundle VST3 and CLAP
-        run: |
-          DLL=target/x86_64-pc-windows-msvc/release/hardwave_kickforge.dll
-          # VST3 bundle
-          mkdir -p target/bundled/hardwave-kickforge.vst3/Contents/x86_64-win
-          cp "$DLL" target/bundled/hardwave-kickforge.vst3/Contents/x86_64-win/hardwave-kickforge.vst3
-          # CLAP bundle
-          cp "$DLL" target/bundled/hardwave-kickforge.clap
+      - name: Build
+        run: cargo xtask bundle hardwave-kickforge --release
 
       - name: Package
+        shell: bash
         run: |
           cd target/bundled
-          zip -r hardwave-kickforge-windows-x64.zip hardwave-kickforge.vst3 hardwave-kickforge.clap
+          7z a -tzip hardwave-kickforge-windows-x64.zip hardwave-kickforge.vst3 hardwave-kickforge.clap
 
       - name: Upload
         uses: actions/upload-artifact@v4
