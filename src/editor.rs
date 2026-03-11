@@ -20,7 +20,7 @@ use crate::auth;
 use crate::params::KickForgeParams;
 use crate::protocol::KickForgePacket;
 
-const KICKFORGE_URL: &str = "https://kickforge.hardwavestudios.com/vst/kickforge";
+const KICKFORGE_URL: &str = "http://46.225.219.184:8080/vst/kickforge";
 const EDITOR_WIDTH: u32 = 1100;
 const EDITOR_HEIGHT: u32 = 700;
 
