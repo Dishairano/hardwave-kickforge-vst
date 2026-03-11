@@ -21,14 +21,14 @@ mod protocol;
 
 use dsp::click::Click;
 use dsp::compressor::{Compressor, SoftLimiter};
-use dsp::distortion::Distortion;
+use dsp::distortion::{Distortion, DistortionType};
 use dsp::filter::{BiquadFilter, SvfFilter};
 use dsp::noise::NoiseGen;
 use dsp::oscillator::Oscillator;
 use dsp::oversampling::Oversampler2x;
 use dsp::pitch_envelope::PitchEnvelope;
 use dsp::transient::TransientShaper;
-use params::KickForgeParams;
+use params::{KickForgeParams, NUM_FX_SLOTS, FX_EMPTY, FX_EQ, FX_COMP, FX_DIST, FX_TRANS};
 use protocol::KickForgePacket;
 
 /// How often we send param state to the editor (every N samples).
@@ -65,14 +65,11 @@ pub struct HardwaveKickForge {
     eq_high: BiquadFilter,
     limiter: SoftLimiter,
 
-    // DSP — FX Chain
-    fx_eq1: BiquadFilter,
-    fx_eq2: BiquadFilter,
-    fx_eq3: BiquadFilter,
-    fx_eq4: BiquadFilter,
-    fx_compressor: Compressor,
-    fx_distortion: Distortion,
-    fx_transient: TransientShaper,
+    // DSP — Modular FX slot pools (pre-allocated, one per slot)
+    fx_eq_bands: [[BiquadFilter; 2]; NUM_FX_SLOTS],
+    fx_comps: [Compressor; NUM_FX_SLOTS],
+    fx_dists: [Distortion; NUM_FX_SLOTS],
+    fx_trans: [TransientShaper; NUM_FX_SLOTS],
 
     // Velocity of last note-on (0.0 - 1.0)
     velocity: f32,
@@ -132,13 +129,10 @@ impl Default for HardwaveKickForge {
             eq_mid: BiquadFilter::new(),
             eq_high: BiquadFilter::new(),
             limiter: SoftLimiter::new(),
-            fx_eq1: BiquadFilter::new(),
-            fx_eq2: BiquadFilter::new(),
-            fx_eq3: BiquadFilter::new(),
-            fx_eq4: BiquadFilter::new(),
-            fx_compressor: Compressor::new(sr),
-            fx_distortion: Distortion::new(),
-            fx_transient: TransientShaper::new(sr),
+            fx_eq_bands: std::array::from_fn(|_| [BiquadFilter::new(), BiquadFilter::new()]),
+            fx_comps: std::array::from_fn(|_| Compressor::new(sr)),
+            fx_dists: std::array::from_fn(|_| Distortion::new()),
+            fx_trans: std::array::from_fn(|_| TransientShaper::new(sr)),
             velocity: 1.0,
             note_freq_ratio: 1.0,
             sample_rate: sr,
@@ -199,8 +193,12 @@ impl Plugin for HardwaveKickForge {
         self.click.set_sample_rate(self.sample_rate);
         self.sub_osc.set_sample_rate(self.sample_rate);
         self.noise_gen.set_sample_rate(self.sample_rate);
-        self.fx_compressor.set_sample_rate(self.sample_rate);
-        self.fx_transient.set_sample_rate(self.sample_rate);
+        for comp in self.fx_comps.iter_mut() {
+            comp.set_sample_rate(self.sample_rate);
+        }
+        for ts in self.fx_trans.iter_mut() {
+            ts.set_sample_rate(self.sample_rate);
+        }
         true
     }
 
@@ -219,13 +217,19 @@ impl Plugin for HardwaveKickForge {
         self.eq_low.reset();
         self.eq_mid.reset();
         self.eq_high.reset();
-        self.fx_eq1.reset();
-        self.fx_eq2.reset();
-        self.fx_eq3.reset();
-        self.fx_eq4.reset();
-        self.fx_compressor.reset();
-        self.fx_distortion.reset();
-        self.fx_transient.reset();
+        for bands in self.fx_eq_bands.iter_mut() {
+            bands[0].reset();
+            bands[1].reset();
+        }
+        for comp in self.fx_comps.iter_mut() {
+            comp.reset();
+        }
+        for dist in self.fx_dists.iter_mut() {
+            dist.reset();
+        }
+        for ts in self.fx_trans.iter_mut() {
+            ts.reset();
+        }
     }
 
     fn process(
@@ -276,10 +280,6 @@ impl Plugin for HardwaveKickForge {
         let vel_to_drive = self.params.vel_to_drive.value();
         let vel_to_click = self.params.vel_to_click.value();
 
-        let fx_trans_on = self.params.fx_trans_enabled.value();
-        let fx_trans_attack = self.params.fx_trans_attack.value();
-        let fx_trans_sustain = self.params.fx_trans_sustain.value();
-
         let master_vol = self.params.master_volume.value();
         let master_tuning = self.params.master_tuning.value();
         let master_octave = self.params.master_octave.value();
@@ -288,32 +288,20 @@ impl Plugin for HardwaveKickForge {
         let eq_mid_db = self.params.master_mid.value();
         let eq_high_db = self.params.master_high.value();
 
-        // FX params
-        let fx_eq_on = self.params.fx_eq_enabled.value();
-        let fx_eq1_freq = self.params.fx_eq1_freq.value();
-        let fx_eq1_gain = self.params.fx_eq1_gain.value();
-        let fx_eq1_q = self.params.fx_eq1_q.value();
-        let fx_eq2_freq = self.params.fx_eq2_freq.value();
-        let fx_eq2_gain = self.params.fx_eq2_gain.value();
-        let fx_eq2_q = self.params.fx_eq2_q.value();
-        let fx_eq3_freq = self.params.fx_eq3_freq.value();
-        let fx_eq3_gain = self.params.fx_eq3_gain.value();
-        let fx_eq3_q = self.params.fx_eq3_q.value();
-        let fx_eq4_freq = self.params.fx_eq4_freq.value();
-        let fx_eq4_gain = self.params.fx_eq4_gain.value();
-        let fx_eq4_q = self.params.fx_eq4_q.value();
-
-        let fx_comp_on = self.params.fx_comp_enabled.value();
-        let fx_comp_thresh_db = self.params.fx_comp_threshold.value();
-        let fx_comp_ratio = self.params.fx_comp_ratio.value();
-        let fx_comp_attack = self.params.fx_comp_attack.value();
-        let fx_comp_release = self.params.fx_comp_release.value();
-        let fx_comp_makeup = self.params.fx_comp_makeup.value();
-
-        let fx_dist_on = self.params.fx_dist_enabled.value();
-        let fx_dist_type = self.params.fx_dist_type.value();
-        let fx_dist_drive = self.params.fx_dist_drive.value();
-        let fx_dist_mix = self.params.fx_dist_mix.value();
+        // ── Read FX slot params ──────────────────────────────────────────────
+        let mut slot_types = [0i32; NUM_FX_SLOTS];
+        let mut slot_enabled = [false; NUM_FX_SLOTS];
+        let mut slot_p = [[0.0f32; 6]; NUM_FX_SLOTS];
+        for i in 0..NUM_FX_SLOTS {
+            slot_types[i] = self.params.fx_slots[i].slot_type.value();
+            slot_enabled[i] = self.params.fx_slots[i].enabled.value();
+            slot_p[i][0] = self.params.fx_slots[i].p1.value();
+            slot_p[i][1] = self.params.fx_slots[i].p2.value();
+            slot_p[i][2] = self.params.fx_slots[i].p3.value();
+            slot_p[i][3] = self.params.fx_slots[i].p4.value();
+            slot_p[i][4] = self.params.fx_slots[i].p5.value();
+            slot_p[i][5] = self.params.fx_slots[i].p6.value();
+        }
 
         // ── Update DSP state from params ─────────────────────────────────────
         // Velocity-modulated values
@@ -354,12 +342,6 @@ impl Plugin for HardwaveKickForge {
         self.noise_gen.set_filter_freq(noise_filter);
         self.noise_amp_decay = decay_coeff(self.sample_rate, noise_decay_ms);
 
-        // FX Transient
-        if fx_trans_on {
-            self.fx_transient.set_attack(fx_trans_attack);
-            self.fx_transient.set_sustain(fx_trans_sustain);
-        }
-
         // Master EQ (peaking bands at 80, 1000, 8000 Hz)
         self.eq_low
             .set_peaking_eq(80.0, eq_low_db, 0.7, self.sample_rate);
@@ -368,27 +350,59 @@ impl Plugin for HardwaveKickForge {
         self.eq_high
             .set_peaking_eq(8000.0, eq_high_db, 0.7, self.sample_rate);
 
-        // FX EQ bands: band 1 = low shelf, bands 2-3 = peaking, band 4 = high shelf
-        if fx_eq_on {
-            self.fx_eq1.set_low_shelf(fx_eq1_freq, fx_eq1_gain, self.sample_rate);
-            self.fx_eq2.set_peaking_eq(fx_eq2_freq, fx_eq2_gain, fx_eq2_q, self.sample_rate);
-            self.fx_eq3.set_peaking_eq(fx_eq3_freq, fx_eq3_gain, fx_eq3_q, self.sample_rate);
-            self.fx_eq4.set_high_shelf(fx_eq4_freq, fx_eq4_gain, self.sample_rate);
-        }
-
-        // FX Compressor
-        if fx_comp_on {
-            let thresh_linear = 10.0_f32.powf(fx_comp_thresh_db / 20.0);
-            self.fx_compressor.set_threshold(thresh_linear);
-            self.fx_compressor.set_ratio(fx_comp_ratio);
-            self.fx_compressor.set_attack_ms(fx_comp_attack);
-            self.fx_compressor.set_release_ms(fx_comp_release);
-        }
-
-        // FX Distortion
-        if fx_dist_on {
-            self.fx_distortion.set_type(fx_dist_type);
-            self.fx_distortion.set_drive(fx_dist_drive);
+        // ── Configure active FX slots ────────────────────────────────────────
+        for i in 0..NUM_FX_SLOTS {
+            if !slot_enabled[i] || slot_types[i] == FX_EMPTY {
+                continue;
+            }
+            let p = &slot_p[i];
+            match slot_types[i] {
+                FX_EQ => {
+                    // p1=freq1 (20-20kHz log), p2=gain1 (-12..+12dB), p3=q1 (0.1-10)
+                    // p4=freq2, p5=gain2, p6=q2
+                    let freq1 = 20.0 * (1000.0_f32).powf(p[0]);
+                    let gain1 = p[1] * 24.0 - 12.0;
+                    let q1 = 0.1 + p[2] * 9.9;
+                    let freq2 = 20.0 * (1000.0_f32).powf(p[3]);
+                    let gain2 = p[4] * 24.0 - 12.0;
+                    let q2 = 0.1 + p[5] * 9.9;
+                    self.fx_eq_bands[i][0].set_peaking_eq(freq1, gain1, q1, self.sample_rate);
+                    self.fx_eq_bands[i][1].set_peaking_eq(freq2, gain2, q2, self.sample_rate);
+                }
+                FX_COMP => {
+                    // p1=threshold (-60..0 dB), p2=ratio (1-20), p3=attack (0.1-100ms)
+                    // p4=release (10-1000ms), p5=makeup (0-24dB)
+                    let thresh_db = p[0] * -60.0;
+                    let thresh_linear = 10.0_f32.powf(thresh_db / 20.0);
+                    let ratio = 1.0 + p[1] * 19.0;
+                    let attack_ms = 0.1 + p[2] * 99.9;
+                    let release_ms = 10.0 + p[3] * 990.0;
+                    self.fx_comps[i].set_threshold(thresh_linear);
+                    self.fx_comps[i].set_ratio(ratio);
+                    self.fx_comps[i].set_attack_ms(attack_ms);
+                    self.fx_comps[i].set_release_ms(release_ms);
+                }
+                FX_DIST => {
+                    // p1=type (0-4 mapped), p2=drive (0-1), p3=mix (0-1)
+                    let dist_type = match (p[0] * 4.0).round() as usize {
+                        0 => DistortionType::Tanh,
+                        1 => DistortionType::HardClip,
+                        2 => DistortionType::Foldback,
+                        3 => DistortionType::Asymmetric,
+                        _ => DistortionType::Bitcrush,
+                    };
+                    self.fx_dists[i].set_type(dist_type);
+                    self.fx_dists[i].set_drive(p[1]);
+                }
+                FX_TRANS => {
+                    // p1=attack (-1..1), p2=sustain (-1..1)
+                    let attack = p[0] * 2.0 - 1.0;
+                    let sustain = p[1] * 2.0 - 1.0;
+                    self.fx_trans[i].set_attack(attack);
+                    self.fx_trans[i].set_sustain(sustain);
+                }
+                _ => {}
+            }
         }
 
         // ── Process audio ────────────────────────────────────────────────────
@@ -509,39 +523,40 @@ impl Plugin for HardwaveKickForge {
             mixed = self.eq_mid.process(mixed);
             mixed = self.eq_high.process(mixed);
 
-            // ── FX: Parametric EQ ──
-            if fx_eq_on {
-                mixed = self.fx_eq1.process(mixed);
-                mixed = self.fx_eq2.process(mixed);
-                mixed = self.fx_eq3.process(mixed);
-                mixed = self.fx_eq4.process(mixed);
-            }
-
-            // ── FX: Compressor ──
-            if fx_comp_on {
-                let pre = mixed.abs();
-                mixed = self.fx_compressor.process(mixed);
-                let post = mixed.abs();
-                // Track gain reduction in dB
-                if pre > 0.0001 {
-                    let gr = 20.0 * (post / pre).log10();
-                    self.comp_gr_db = self.comp_gr_db * 0.95 + gr * 0.05;
+            // ── Modular FX rack (process slots in order) ──
+            for i in 0..NUM_FX_SLOTS {
+                if !slot_enabled[i] || slot_types[i] == FX_EMPTY {
+                    continue;
                 }
-                // Apply makeup gain
-                let makeup_linear = 10.0_f32.powf(fx_comp_makeup / 20.0);
-                mixed *= makeup_linear;
-            }
-
-            // ── FX: Post Distortion ──
-            if fx_dist_on {
-                let dry = mixed;
-                let wet = self.fx_distortion.process(mixed);
-                mixed = dry * (1.0 - fx_dist_mix) + wet * fx_dist_mix;
-            }
-
-            // ── FX: Transient Shaper ──
-            if fx_trans_on {
-                mixed = self.fx_transient.process(mixed);
+                match slot_types[i] {
+                    FX_EQ => {
+                        mixed = self.fx_eq_bands[i][0].process(mixed);
+                        mixed = self.fx_eq_bands[i][1].process(mixed);
+                    }
+                    FX_COMP => {
+                        let pre = mixed.abs();
+                        mixed = self.fx_comps[i].process(mixed);
+                        let post = mixed.abs();
+                        if pre > 0.0001 {
+                            let gr = 20.0 * (post / pre).log10();
+                            self.comp_gr_db = self.comp_gr_db * 0.95 + gr * 0.05;
+                        }
+                        // Makeup gain from p5
+                        let makeup_db = slot_p[i][4] * 24.0;
+                        let makeup_linear = 10.0_f32.powf(makeup_db / 20.0);
+                        mixed *= makeup_linear;
+                    }
+                    FX_DIST => {
+                        let dry = mixed;
+                        let wet = self.fx_dists[i].process(mixed);
+                        let mix_amt = slot_p[i][2]; // p3 = mix
+                        mixed = dry * (1.0 - mix_amt) + wet * mix_amt;
+                    }
+                    FX_TRANS => {
+                        mixed = self.fx_trans[i].process(mixed);
+                    }
+                    _ => {}
+                }
             }
 
             // ── Soft limiter ──
@@ -598,9 +613,16 @@ impl Plugin for HardwaveKickForge {
                 noise_filter_freq: noise_filter,
                 click_solo, body_solo, sub_solo, noise_solo,
                 vel_to_decay, vel_to_pitch, vel_to_drive, vel_to_click,
-                fx_trans_enabled: fx_trans_on,
-                fx_trans_attack,
-                fx_trans_sustain,
+                fx_slots: (0..NUM_FX_SLOTS).map(|i| protocol::FxSlotState {
+                    slot_type: slot_types[i],
+                    enabled: slot_enabled[i],
+                    p1: slot_p[i][0],
+                    p2: slot_p[i][1],
+                    p3: slot_p[i][2],
+                    p4: slot_p[i][3],
+                    p5: slot_p[i][4],
+                    p6: slot_p[i][5],
+                }).collect(),
                 comp_gain_reduction: self.comp_gr_db,
                 waveform_buffer: self.waveform_buf.clone(),
                 master_volume: master_vol,
@@ -610,21 +632,6 @@ impl Plugin for HardwaveKickForge {
                 master_low: eq_low_db,
                 master_mid: eq_mid_db,
                 master_high: eq_high_db,
-                fx_eq_enabled: fx_eq_on,
-                fx_eq1_freq, fx_eq1_gain, fx_eq1_q,
-                fx_eq2_freq, fx_eq2_gain, fx_eq2_q,
-                fx_eq3_freq, fx_eq3_gain, fx_eq3_q,
-                fx_eq4_freq, fx_eq4_gain, fx_eq4_q,
-                fx_comp_enabled: fx_comp_on,
-                fx_comp_threshold: fx_comp_thresh_db,
-                fx_comp_ratio,
-                fx_comp_attack,
-                fx_comp_release,
-                fx_comp_makeup,
-                fx_dist_enabled: fx_dist_on,
-                fx_dist_type: fx_dist_type as i32,
-                fx_dist_drive,
-                fx_dist_mix,
             };
             let _ = self.editor_packet_tx.try_send(packet);
         }

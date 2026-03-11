@@ -125,10 +125,17 @@ fn build_param_map(params: &KickForgeParams) -> HashMap<String, nih_plug::prelud
     map.insert("velToDrive".into(), params.vel_to_drive.as_ptr());
     map.insert("velToClick".into(), params.vel_to_click.as_ptr());
 
-    // FX: Transient Shaper
-    map.insert("fxTransEnabled".into(), params.fx_trans_enabled.as_ptr());
-    map.insert("fxTransAttack".into(), params.fx_trans_attack.as_ptr());
-    map.insert("fxTransSustain".into(), params.fx_trans_sustain.as_ptr());
+    // Modular FX Rack (8 slots)
+    for (i, slot) in params.fx_slots.iter().enumerate() {
+        map.insert(format!("fxSlot{}Type", i), slot.slot_type.as_ptr());
+        map.insert(format!("fxSlot{}On", i), slot.enabled.as_ptr());
+        map.insert(format!("fxSlot{}P1", i), slot.p1.as_ptr());
+        map.insert(format!("fxSlot{}P2", i), slot.p2.as_ptr());
+        map.insert(format!("fxSlot{}P3", i), slot.p3.as_ptr());
+        map.insert(format!("fxSlot{}P4", i), slot.p4.as_ptr());
+        map.insert(format!("fxSlot{}P5", i), slot.p5.as_ptr());
+        map.insert(format!("fxSlot{}P6", i), slot.p6.as_ptr());
+    }
 
     // Master
     map.insert("masterVolume".into(), params.master_volume.as_ptr());
@@ -138,35 +145,6 @@ fn build_param_map(params: &KickForgeParams) -> HashMap<String, nih_plug::prelud
     map.insert("masterLow".into(), params.master_low.as_ptr());
     map.insert("masterMid".into(), params.master_mid.as_ptr());
     map.insert("masterHigh".into(), params.master_high.as_ptr());
-
-    // FX: Parametric EQ
-    map.insert("fxEqEnabled".into(), params.fx_eq_enabled.as_ptr());
-    map.insert("fxEq1Freq".into(), params.fx_eq1_freq.as_ptr());
-    map.insert("fxEq1Gain".into(), params.fx_eq1_gain.as_ptr());
-    map.insert("fxEq1Q".into(), params.fx_eq1_q.as_ptr());
-    map.insert("fxEq2Freq".into(), params.fx_eq2_freq.as_ptr());
-    map.insert("fxEq2Gain".into(), params.fx_eq2_gain.as_ptr());
-    map.insert("fxEq2Q".into(), params.fx_eq2_q.as_ptr());
-    map.insert("fxEq3Freq".into(), params.fx_eq3_freq.as_ptr());
-    map.insert("fxEq3Gain".into(), params.fx_eq3_gain.as_ptr());
-    map.insert("fxEq3Q".into(), params.fx_eq3_q.as_ptr());
-    map.insert("fxEq4Freq".into(), params.fx_eq4_freq.as_ptr());
-    map.insert("fxEq4Gain".into(), params.fx_eq4_gain.as_ptr());
-    map.insert("fxEq4Q".into(), params.fx_eq4_q.as_ptr());
-
-    // FX: Compressor
-    map.insert("fxCompEnabled".into(), params.fx_comp_enabled.as_ptr());
-    map.insert("fxCompThreshold".into(), params.fx_comp_threshold.as_ptr());
-    map.insert("fxCompRatio".into(), params.fx_comp_ratio.as_ptr());
-    map.insert("fxCompAttack".into(), params.fx_comp_attack.as_ptr());
-    map.insert("fxCompRelease".into(), params.fx_comp_release.as_ptr());
-    map.insert("fxCompMakeup".into(), params.fx_comp_makeup.as_ptr());
-
-    // FX: Post Distortion
-    map.insert("fxDistEnabled".into(), params.fx_dist_enabled.as_ptr());
-    map.insert("fxDistType".into(), params.fx_dist_type.as_ptr());
-    map.insert("fxDistDrive".into(), params.fx_dist_drive.as_ptr());
-    map.insert("fxDistMix".into(), params.fx_dist_mix.as_ptr());
 
     map
 }

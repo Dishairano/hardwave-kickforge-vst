@@ -5,6 +5,20 @@
 
 use serde::{Deserialize, Serialize};
 
+/// State of a single modular FX slot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FxSlotState {
+    pub slot_type: i32,
+    pub enabled: bool,
+    pub p1: f32,
+    pub p2: f32,
+    pub p3: f32,
+    pub p4: f32,
+    pub p5: f32,
+    pub p6: f32,
+}
+
 /// Full parameter state, serialised as JSON and pushed to the WebView.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,10 +69,8 @@ pub struct KickForgePacket {
     pub vel_to_drive: f32,
     pub vel_to_click: f32,
 
-    // FX: Transient Shaper
-    pub fx_trans_enabled: bool,
-    pub fx_trans_attack: f32,
-    pub fx_trans_sustain: f32,
+    // Modular FX rack (8 slots)
+    pub fx_slots: Vec<FxSlotState>,
 
     // Metering (plugin -> UI only)
     pub comp_gain_reduction: f32,
@@ -72,33 +84,4 @@ pub struct KickForgePacket {
     pub master_low: f32,
     pub master_mid: f32,
     pub master_high: f32,
-
-    // FX: Parametric EQ
-    pub fx_eq_enabled: bool,
-    pub fx_eq1_freq: f32,
-    pub fx_eq1_gain: f32,
-    pub fx_eq1_q: f32,
-    pub fx_eq2_freq: f32,
-    pub fx_eq2_gain: f32,
-    pub fx_eq2_q: f32,
-    pub fx_eq3_freq: f32,
-    pub fx_eq3_gain: f32,
-    pub fx_eq3_q: f32,
-    pub fx_eq4_freq: f32,
-    pub fx_eq4_gain: f32,
-    pub fx_eq4_q: f32,
-
-    // FX: Compressor
-    pub fx_comp_enabled: bool,
-    pub fx_comp_threshold: f32,
-    pub fx_comp_ratio: f32,
-    pub fx_comp_attack: f32,
-    pub fx_comp_release: f32,
-    pub fx_comp_makeup: f32,
-
-    // FX: Post Distortion
-    pub fx_dist_enabled: bool,
-    pub fx_dist_type: i32,
-    pub fx_dist_drive: f32,
-    pub fx_dist_mix: f32,
 }
