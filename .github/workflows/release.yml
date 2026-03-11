@@ -172,7 +172,7 @@ jobs:
           # For a real universal binary, a dedicated macOS job would be needed.
           # Ship both arch zips plus a combined universal zip with arm64 contents (most common target).
           cp -r artifacts/hardwave-kickforge-macos-arm64/hardwave-kickforge.vst3 universal-macos/
-          cp artifacts/hardwave-kickforge-macos-arm64/hardwave-kickforge.clap universal-macos/
+          cp -r artifacts/hardwave-kickforge-macos-arm64/hardwave-kickforge.clap universal-macos/
           cd universal-macos
           zip -r hardwave-kickforge-macos-universal.zip hardwave-kickforge.vst3 hardwave-kickforge.clap
 
