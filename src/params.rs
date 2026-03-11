@@ -7,6 +7,7 @@ use nih_plug::prelude::*;
 
 use crate::dsp::click::ClickType;
 use crate::dsp::distortion::DistortionType;
+use crate::dsp::noise::NoiseType;
 use crate::dsp::oscillator::Waveform;
 use crate::dsp::pitch_envelope::PitchCurve;
 
@@ -77,6 +78,58 @@ pub struct KickForgeParams {
 
     #[id = "sub_decay"]
     pub sub_decay: FloatParam,
+
+    // ── Noise layer ──────────────────────────────────────────────────────────
+    #[id = "noise_enabled"]
+    pub noise_enabled: BoolParam,
+
+    #[id = "noise_type"]
+    pub noise_type: EnumParam<NoiseType>,
+
+    #[id = "noise_volume"]
+    pub noise_volume: FloatParam,
+
+    #[id = "noise_decay"]
+    pub noise_decay: FloatParam,
+
+    #[id = "noise_filter_freq"]
+    pub noise_filter_freq: FloatParam,
+
+    // ── Layer solo ────────────────────────────────────────────────────────────
+    #[id = "click_solo"]
+    pub click_solo: BoolParam,
+
+    #[id = "body_solo"]
+    pub body_solo: BoolParam,
+
+    #[id = "sub_solo"]
+    pub sub_solo: BoolParam,
+
+    #[id = "noise_solo"]
+    pub noise_solo: BoolParam,
+
+    // ── Velocity mapping ──────────────────────────────────────────────────────
+    #[id = "vel_to_decay"]
+    pub vel_to_decay: FloatParam,
+
+    #[id = "vel_to_pitch"]
+    pub vel_to_pitch: FloatParam,
+
+    #[id = "vel_to_drive"]
+    pub vel_to_drive: FloatParam,
+
+    #[id = "vel_to_click"]
+    pub vel_to_click: FloatParam,
+
+    // ── FX: Transient Shaper ──────────────────────────────────────────────────
+    #[id = "fx_trans_enabled"]
+    pub fx_trans_enabled: BoolParam,
+
+    #[id = "fx_trans_attack"]
+    pub fx_trans_attack: FloatParam,
+
+    #[id = "fx_trans_sustain"]
+    pub fx_trans_sustain: FloatParam,
 
     // ── Master ──────────────────────────────────────────────────────────────
     #[id = "master_volume"]
@@ -345,6 +398,69 @@ impl Default for KickForgeParams {
                 },
             )
             .with_unit(" ms"),
+
+            // ── Noise layer ───────────────────────────────────────────────
+            noise_enabled: BoolParam::new("Noise On", false),
+            noise_type: EnumParam::new("Noise Type", NoiseType::White),
+            noise_volume: FloatParam::new(
+                "Noise Volume", 0.3,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            ).with_unit(" %")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+            noise_decay: FloatParam::new(
+                "Noise Decay", 100.0,
+                FloatRange::Skewed { min: 10.0, max: 2000.0, factor: FloatRange::skew_factor(-1.5) },
+            ).with_unit(" ms"),
+            noise_filter_freq: FloatParam::new(
+                "Noise Filter", 5000.0,
+                FloatRange::Skewed { min: 200.0, max: 20000.0, factor: FloatRange::skew_factor(-2.0) },
+            ).with_unit(" Hz")
+            .with_value_to_string(formatters::v2s_f32_hz_then_khz(0))
+            .with_string_to_value(formatters::s2v_f32_hz_then_khz()),
+
+            // ── Layer solo ───────────────────────────────────────────────────
+            click_solo: BoolParam::new("Click Solo", false),
+            body_solo: BoolParam::new("Body Solo", false),
+            sub_solo: BoolParam::new("Sub Solo", false),
+            noise_solo: BoolParam::new("Noise Solo", false),
+
+            // ── Velocity mapping ─────────────────────────────────────────────
+            vel_to_decay: FloatParam::new(
+                "Vel→Decay", 0.0,
+                FloatRange::Linear { min: -1.0, max: 1.0 },
+            ).with_unit(" %")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+            vel_to_pitch: FloatParam::new(
+                "Vel→Pitch", 0.0,
+                FloatRange::Linear { min: -1.0, max: 1.0 },
+            ).with_unit(" %")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+            vel_to_drive: FloatParam::new(
+                "Vel→Drive", 0.0,
+                FloatRange::Linear { min: -1.0, max: 1.0 },
+            ).with_unit(" %")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+            vel_to_click: FloatParam::new(
+                "Vel→Click", 0.0,
+                FloatRange::Linear { min: -1.0, max: 1.0 },
+            ).with_unit(" %")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+
+            // ── FX: Transient Shaper ─────────────────────────────────────────
+            fx_trans_enabled: BoolParam::new("FX Transient On", false),
+            fx_trans_attack: FloatParam::new(
+                "Trans Attack", 0.0,
+                FloatRange::Linear { min: -1.0, max: 1.0 },
+            ),
+            fx_trans_sustain: FloatParam::new(
+                "Trans Sustain", 0.0,
+                FloatRange::Linear { min: -1.0, max: 1.0 },
+            ),
 
             // ── Master ──────────────────────────────────────────────────────
             master_volume: FloatParam::new(

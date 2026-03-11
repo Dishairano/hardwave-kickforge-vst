@@ -36,6 +36,34 @@ pub struct KickForgePacket {
     pub sub_volume: f32,
     pub sub_decay: f32,
 
+    // Noise layer
+    pub noise_enabled: bool,
+    pub noise_type: i32,
+    pub noise_volume: f32,
+    pub noise_decay: f32,
+    pub noise_filter_freq: f32,
+
+    // Layer solo
+    pub click_solo: bool,
+    pub body_solo: bool,
+    pub sub_solo: bool,
+    pub noise_solo: bool,
+
+    // Velocity mapping
+    pub vel_to_decay: f32,
+    pub vel_to_pitch: f32,
+    pub vel_to_drive: f32,
+    pub vel_to_click: f32,
+
+    // FX: Transient Shaper
+    pub fx_trans_enabled: bool,
+    pub fx_trans_attack: f32,
+    pub fx_trans_sustain: f32,
+
+    // Metering (plugin -> UI only)
+    pub comp_gain_reduction: f32,
+    pub waveform_buffer: Vec<f32>,
+
     // Master
     pub master_volume: f32,
     pub master_tuning: f32,

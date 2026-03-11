@@ -23,9 +23,11 @@ use dsp::click::Click;
 use dsp::compressor::{Compressor, SoftLimiter};
 use dsp::distortion::Distortion;
 use dsp::filter::{BiquadFilter, SvfFilter};
+use dsp::noise::NoiseGen;
 use dsp::oscillator::Oscillator;
 use dsp::oversampling::Oversampler2x;
 use dsp::pitch_envelope::PitchEnvelope;
+use dsp::transient::TransientShaper;
 use params::KickForgeParams;
 use protocol::KickForgePacket;
 
@@ -52,6 +54,11 @@ pub struct HardwaveKickForge {
     sub_amp_level: f32,
     sub_amp_decay: f32,
 
+    // DSP — Noise layer
+    noise_gen: NoiseGen,
+    noise_amp_level: f32,
+    noise_amp_decay: f32,
+
     // DSP — Master
     eq_low: BiquadFilter,
     eq_mid: BiquadFilter,
@@ -65,6 +72,7 @@ pub struct HardwaveKickForge {
     fx_eq4: BiquadFilter,
     fx_compressor: Compressor,
     fx_distortion: Distortion,
+    fx_transient: TransientShaper,
 
     // Velocity of last note-on (0.0 - 1.0)
     velocity: f32,
@@ -78,6 +86,14 @@ pub struct HardwaveKickForge {
     editor_packet_tx: Sender<KickForgePacket>,
     editor_packet_rx: Arc<Mutex<Receiver<KickForgePacket>>>,
     update_counter: u32,
+
+    // Waveform buffer for visualizer (captures last kick)
+    waveform_buf: Vec<f32>,
+    waveform_write_pos: usize,
+    waveform_capturing: bool,
+
+    // Compressor gain reduction metering
+    comp_gr_db: f32,
 }
 
 /// Calculate per-sample exponential decay coefficient from decay time in ms.
@@ -109,6 +125,9 @@ impl Default for HardwaveKickForge {
             sub_osc: Oscillator::new(sr),
             sub_amp_level: 0.0,
             sub_amp_decay: decay_coeff(sr, 300.0),
+            noise_gen: NoiseGen::new(sr),
+            noise_amp_level: 0.0,
+            noise_amp_decay: decay_coeff(sr, 100.0),
             eq_low: BiquadFilter::new(),
             eq_mid: BiquadFilter::new(),
             eq_high: BiquadFilter::new(),
@@ -119,12 +138,17 @@ impl Default for HardwaveKickForge {
             fx_eq4: BiquadFilter::new(),
             fx_compressor: Compressor::new(sr),
             fx_distortion: Distortion::new(),
+            fx_transient: TransientShaper::new(sr),
             velocity: 1.0,
             note_freq_ratio: 1.0,
             sample_rate: sr,
             editor_packet_tx: pkt_tx,
             editor_packet_rx: Arc::new(Mutex::new(pkt_rx)),
             update_counter: 0,
+            waveform_buf: vec![0.0; 512],
+            waveform_write_pos: 0,
+            waveform_capturing: false,
+            comp_gr_db: 0.0,
         }
     }
 }
@@ -174,7 +198,9 @@ impl Plugin for HardwaveKickForge {
         self.body_tone_filter.set_sample_rate(self.sample_rate);
         self.click.set_sample_rate(self.sample_rate);
         self.sub_osc.set_sample_rate(self.sample_rate);
+        self.noise_gen.set_sample_rate(self.sample_rate);
         self.fx_compressor.set_sample_rate(self.sample_rate);
+        self.fx_transient.set_sample_rate(self.sample_rate);
         true
     }
 
@@ -188,6 +214,8 @@ impl Plugin for HardwaveKickForge {
         self.click.reset();
         self.sub_osc.reset();
         self.sub_amp_level = 0.0;
+        self.noise_gen.reset();
+        self.noise_amp_level = 0.0;
         self.eq_low.reset();
         self.eq_mid.reset();
         self.eq_high.reset();
@@ -197,6 +225,7 @@ impl Plugin for HardwaveKickForge {
         self.fx_eq4.reset();
         self.fx_compressor.reset();
         self.fx_distortion.reset();
+        self.fx_transient.reset();
     }
 
     fn process(
@@ -229,6 +258,27 @@ impl Plugin for HardwaveKickForge {
         let sub_freq = self.params.sub_frequency.value();
         let sub_vol = self.params.sub_volume.value();
         let sub_decay_ms = self.params.sub_decay.value();
+
+        let noise_on = self.params.noise_enabled.value();
+        let noise_type = self.params.noise_type.value();
+        let noise_vol = self.params.noise_volume.value();
+        let noise_decay_ms = self.params.noise_decay.value();
+        let noise_filter = self.params.noise_filter_freq.value();
+
+        let click_solo = self.params.click_solo.value();
+        let body_solo = self.params.body_solo.value();
+        let sub_solo = self.params.sub_solo.value();
+        let noise_solo = self.params.noise_solo.value();
+        let any_solo = click_solo || body_solo || sub_solo || noise_solo;
+
+        let vel_to_decay = self.params.vel_to_decay.value();
+        let vel_to_pitch = self.params.vel_to_pitch.value();
+        let vel_to_drive = self.params.vel_to_drive.value();
+        let vel_to_click = self.params.vel_to_click.value();
+
+        let fx_trans_on = self.params.fx_trans_enabled.value();
+        let fx_trans_attack = self.params.fx_trans_attack.value();
+        let fx_trans_sustain = self.params.fx_trans_sustain.value();
 
         let master_vol = self.params.master_volume.value();
         let master_tuning = self.params.master_tuning.value();
@@ -266,20 +316,27 @@ impl Plugin for HardwaveKickForge {
         let fx_dist_mix = self.params.fx_dist_mix.value();
 
         // ── Update DSP state from params ─────────────────────────────────────
+        // Velocity-modulated values
+        let vel = self.velocity;
+        let eff_drive = (body_drive + vel_to_drive * (vel - 0.5)).clamp(0.0, 1.0);
+        let eff_pitch_start = body_pitch_start * (1.0 + vel_to_pitch * (vel - 0.5));
+        let eff_decay_ms = body_decay_ms * (1.0 + vel_to_decay * (vel - 0.5));
+        let eff_click_vol = (click_vol + vel_to_click * (vel - 0.5)).clamp(0.0, 1.0);
+
         // Combine octave, fine tuning (semitones), and MIDI note tracking
         let tuning_factor = 2.0_f32.powf((master_tuning + master_octave as f32 * 12.0) / 12.0)
             * self.note_freq_ratio;
         self.body_pitch_env
-            .set_start_freq(body_pitch_start * tuning_factor);
+            .set_start_freq(eff_pitch_start * tuning_factor);
         self.body_pitch_env
             .set_end_freq(body_pitch_end * tuning_factor);
         self.body_pitch_env.set_decay_ms(body_pitch_decay);
         self.body_pitch_env.set_curve(body_pitch_curve);
 
         self.body_osc.set_waveform(body_waveform);
-        self.body_distortion.set_drive(body_drive);
+        self.body_distortion.set_drive(eff_drive);
         self.body_distortion.set_type(body_dist_type);
-        self.body_amp_decay = decay_coeff(self.sample_rate, body_decay_ms);
+        self.body_amp_decay = decay_coeff(self.sample_rate, eff_decay_ms);
 
         self.body_tone_filter.set_cutoff(body_tone);
         self.body_tone_filter.set_resonance(body_resonance);
@@ -292,6 +349,16 @@ impl Plugin for HardwaveKickForge {
         self.sub_osc
             .set_frequency(sub_freq * tuning_factor);
         self.sub_amp_decay = decay_coeff(self.sample_rate, sub_decay_ms);
+
+        self.noise_gen.set_noise_type(noise_type);
+        self.noise_gen.set_filter_freq(noise_filter);
+        self.noise_amp_decay = decay_coeff(self.sample_rate, noise_decay_ms);
+
+        // FX Transient
+        if fx_trans_on {
+            self.fx_transient.set_attack(fx_trans_attack);
+            self.fx_transient.set_sustain(fx_trans_sustain);
+        }
 
         // Master EQ (peaking bands at 80, 1000, 8000 Hz)
         self.eq_low
@@ -360,6 +427,16 @@ impl Plugin for HardwaveKickForge {
                         self.sub_osc.reset();
                         self.sub_amp_level = 1.0;
                     }
+
+                    // Trigger noise
+                    if noise_on {
+                        self.noise_gen.reset();
+                        self.noise_amp_level = 1.0;
+                    }
+
+                    // Start waveform capture
+                    self.waveform_capturing = true;
+                    self.waveform_write_pos = 0;
                 }
 
                 next_event = context.next_event();
@@ -386,7 +463,7 @@ impl Plugin for HardwaveKickForge {
 
             // ── Click transient ──
             let click_sample = if click_on {
-                self.click.process() * click_vol
+                self.click.process() * eff_click_vol
             } else {
                 0.0
             };
@@ -403,9 +480,29 @@ impl Plugin for HardwaveKickForge {
                 0.0
             };
 
-            // ── Mix layers (velocity-scaled) ──
-            let mut mixed =
-                (body_sample + click_sample + sub_sample) * master_vol * self.velocity;
+            // ── Noise ──
+            let noise_sample = if noise_on {
+                let s = self.noise_gen.process() * self.noise_amp_level * noise_vol;
+                self.noise_amp_level *= self.noise_amp_decay;
+                if self.noise_amp_level < 0.0001 {
+                    self.noise_amp_level = 0.0;
+                }
+                s
+            } else {
+                0.0
+            };
+
+            // ── Mix layers with solo logic ──
+            let mut mixed = if any_solo {
+                let mut m = 0.0;
+                if click_solo { m += click_sample; }
+                if body_solo { m += body_sample; }
+                if sub_solo { m += sub_sample; }
+                if noise_solo { m += noise_sample; }
+                m * master_vol * vel
+            } else {
+                (body_sample + click_sample + sub_sample + noise_sample) * master_vol * vel
+            };
 
             // ── Master 3-band EQ ──
             mixed = self.eq_low.process(mixed);
@@ -422,7 +519,14 @@ impl Plugin for HardwaveKickForge {
 
             // ── FX: Compressor ──
             if fx_comp_on {
+                let pre = mixed.abs();
                 mixed = self.fx_compressor.process(mixed);
+                let post = mixed.abs();
+                // Track gain reduction in dB
+                if pre > 0.0001 {
+                    let gr = 20.0 * (post / pre).log10();
+                    self.comp_gr_db = self.comp_gr_db * 0.95 + gr * 0.05;
+                }
                 // Apply makeup gain
                 let makeup_linear = 10.0_f32.powf(fx_comp_makeup / 20.0);
                 mixed *= makeup_linear;
@@ -435,6 +539,11 @@ impl Plugin for HardwaveKickForge {
                 mixed = dry * (1.0 - fx_dist_mix) + wet * fx_dist_mix;
             }
 
+            // ── FX: Transient Shaper ──
+            if fx_trans_on {
+                mixed = self.fx_transient.process(mixed);
+            }
+
             // ── Soft limiter ──
             if limiter_on {
                 mixed = self.limiter.process(mixed);
@@ -443,6 +552,15 @@ impl Plugin for HardwaveKickForge {
             // Write mono kick to stereo output
             left[sample_idx] = mixed;
             right[sample_idx] = mixed;
+
+            // Capture waveform for visualizer
+            if self.waveform_capturing && self.waveform_write_pos < self.waveform_buf.len() {
+                self.waveform_buf[self.waveform_write_pos] = mixed;
+                self.waveform_write_pos += 1;
+                if self.waveform_write_pos >= self.waveform_buf.len() {
+                    self.waveform_capturing = false;
+                }
+            }
 
             sample_idx += 1;
         }
@@ -473,6 +591,18 @@ impl Plugin for HardwaveKickForge {
                 sub_frequency: sub_freq,
                 sub_volume: sub_vol,
                 sub_decay: sub_decay_ms,
+                noise_enabled: noise_on,
+                noise_type: noise_type as i32,
+                noise_volume: noise_vol,
+                noise_decay: noise_decay_ms,
+                noise_filter_freq: noise_filter,
+                click_solo, body_solo, sub_solo, noise_solo,
+                vel_to_decay, vel_to_pitch, vel_to_drive, vel_to_click,
+                fx_trans_enabled: fx_trans_on,
+                fx_trans_attack,
+                fx_trans_sustain,
+                comp_gain_reduction: self.comp_gr_db,
+                waveform_buffer: self.waveform_buf.clone(),
                 master_volume: master_vol,
                 master_tuning,
                 master_octave: master_octave as i32,

@@ -106,6 +106,30 @@ fn build_param_map(params: &KickForgeParams) -> HashMap<String, nih_plug::prelud
     map.insert("subVolume".into(), params.sub_volume.as_ptr());
     map.insert("subDecay".into(), params.sub_decay.as_ptr());
 
+    // Noise layer
+    map.insert("noiseEnabled".into(), params.noise_enabled.as_ptr());
+    map.insert("noiseType".into(), params.noise_type.as_ptr());
+    map.insert("noiseVolume".into(), params.noise_volume.as_ptr());
+    map.insert("noiseDecay".into(), params.noise_decay.as_ptr());
+    map.insert("noiseFilterFreq".into(), params.noise_filter_freq.as_ptr());
+
+    // Layer solo
+    map.insert("clickSolo".into(), params.click_solo.as_ptr());
+    map.insert("bodySolo".into(), params.body_solo.as_ptr());
+    map.insert("subSolo".into(), params.sub_solo.as_ptr());
+    map.insert("noiseSolo".into(), params.noise_solo.as_ptr());
+
+    // Velocity mapping
+    map.insert("velToDecay".into(), params.vel_to_decay.as_ptr());
+    map.insert("velToPitch".into(), params.vel_to_pitch.as_ptr());
+    map.insert("velToDrive".into(), params.vel_to_drive.as_ptr());
+    map.insert("velToClick".into(), params.vel_to_click.as_ptr());
+
+    // FX: Transient Shaper
+    map.insert("fxTransEnabled".into(), params.fx_trans_enabled.as_ptr());
+    map.insert("fxTransAttack".into(), params.fx_trans_attack.as_ptr());
+    map.insert("fxTransSustain".into(), params.fx_trans_sustain.as_ptr());
+
     // Master
     map.insert("masterVolume".into(), params.master_volume.as_ptr());
     map.insert("masterTuning".into(), params.master_tuning.as_ptr());
