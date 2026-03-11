@@ -44,4 +44,33 @@ pub struct KickForgePacket {
     pub master_low: f32,
     pub master_mid: f32,
     pub master_high: f32,
+
+    // FX: Parametric EQ
+    pub fx_eq_enabled: bool,
+    pub fx_eq1_freq: f32,
+    pub fx_eq1_gain: f32,
+    pub fx_eq1_q: f32,
+    pub fx_eq2_freq: f32,
+    pub fx_eq2_gain: f32,
+    pub fx_eq2_q: f32,
+    pub fx_eq3_freq: f32,
+    pub fx_eq3_gain: f32,
+    pub fx_eq3_q: f32,
+    pub fx_eq4_freq: f32,
+    pub fx_eq4_gain: f32,
+    pub fx_eq4_q: f32,
+
+    // FX: Compressor
+    pub fx_comp_enabled: bool,
+    pub fx_comp_threshold: f32,
+    pub fx_comp_ratio: f32,
+    pub fx_comp_attack: f32,
+    pub fx_comp_release: f32,
+    pub fx_comp_makeup: f32,
+
+    // FX: Post Distortion
+    pub fx_dist_enabled: bool,
+    pub fx_dist_type: i32,
+    pub fx_dist_drive: f32,
+    pub fx_dist_mix: f32,
 }

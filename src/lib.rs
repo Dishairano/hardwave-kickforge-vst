@@ -20,7 +20,7 @@ mod presets;
 mod protocol;
 
 use dsp::click::Click;
-use dsp::compressor::SoftLimiter;
+use dsp::compressor::{Compressor, SoftLimiter};
 use dsp::distortion::Distortion;
 use dsp::filter::{BiquadFilter, SvfFilter};
 use dsp::oscillator::Oscillator;
@@ -57,6 +57,14 @@ pub struct HardwaveKickForge {
     eq_mid: BiquadFilter,
     eq_high: BiquadFilter,
     limiter: SoftLimiter,
+
+    // DSP — FX Chain
+    fx_eq1: BiquadFilter,
+    fx_eq2: BiquadFilter,
+    fx_eq3: BiquadFilter,
+    fx_eq4: BiquadFilter,
+    fx_compressor: Compressor,
+    fx_distortion: Distortion,
 
     // Velocity of last note-on (0.0 - 1.0)
     velocity: f32,
@@ -105,6 +113,12 @@ impl Default for HardwaveKickForge {
             eq_mid: BiquadFilter::new(),
             eq_high: BiquadFilter::new(),
             limiter: SoftLimiter::new(),
+            fx_eq1: BiquadFilter::new(),
+            fx_eq2: BiquadFilter::new(),
+            fx_eq3: BiquadFilter::new(),
+            fx_eq4: BiquadFilter::new(),
+            fx_compressor: Compressor::new(sr),
+            fx_distortion: Distortion::new(),
             velocity: 1.0,
             note_freq_ratio: 1.0,
             sample_rate: sr,
@@ -160,6 +174,7 @@ impl Plugin for HardwaveKickForge {
         self.body_tone_filter.set_sample_rate(self.sample_rate);
         self.click.set_sample_rate(self.sample_rate);
         self.sub_osc.set_sample_rate(self.sample_rate);
+        self.fx_compressor.set_sample_rate(self.sample_rate);
         true
     }
 
@@ -176,6 +191,12 @@ impl Plugin for HardwaveKickForge {
         self.eq_low.reset();
         self.eq_mid.reset();
         self.eq_high.reset();
+        self.fx_eq1.reset();
+        self.fx_eq2.reset();
+        self.fx_eq3.reset();
+        self.fx_eq4.reset();
+        self.fx_compressor.reset();
+        self.fx_distortion.reset();
     }
 
     fn process(
@@ -217,6 +238,33 @@ impl Plugin for HardwaveKickForge {
         let eq_mid_db = self.params.master_mid.value();
         let eq_high_db = self.params.master_high.value();
 
+        // FX params
+        let fx_eq_on = self.params.fx_eq_enabled.value();
+        let fx_eq1_freq = self.params.fx_eq1_freq.value();
+        let fx_eq1_gain = self.params.fx_eq1_gain.value();
+        let fx_eq1_q = self.params.fx_eq1_q.value();
+        let fx_eq2_freq = self.params.fx_eq2_freq.value();
+        let fx_eq2_gain = self.params.fx_eq2_gain.value();
+        let fx_eq2_q = self.params.fx_eq2_q.value();
+        let fx_eq3_freq = self.params.fx_eq3_freq.value();
+        let fx_eq3_gain = self.params.fx_eq3_gain.value();
+        let fx_eq3_q = self.params.fx_eq3_q.value();
+        let fx_eq4_freq = self.params.fx_eq4_freq.value();
+        let fx_eq4_gain = self.params.fx_eq4_gain.value();
+        let fx_eq4_q = self.params.fx_eq4_q.value();
+
+        let fx_comp_on = self.params.fx_comp_enabled.value();
+        let fx_comp_thresh_db = self.params.fx_comp_threshold.value();
+        let fx_comp_ratio = self.params.fx_comp_ratio.value();
+        let fx_comp_attack = self.params.fx_comp_attack.value();
+        let fx_comp_release = self.params.fx_comp_release.value();
+        let fx_comp_makeup = self.params.fx_comp_makeup.value();
+
+        let fx_dist_on = self.params.fx_dist_enabled.value();
+        let fx_dist_type = self.params.fx_dist_type.value();
+        let fx_dist_drive = self.params.fx_dist_drive.value();
+        let fx_dist_mix = self.params.fx_dist_mix.value();
+
         // ── Update DSP state from params ─────────────────────────────────────
         // Combine octave, fine tuning (semitones), and MIDI note tracking
         let tuning_factor = 2.0_f32.powf((master_tuning + master_octave as f32 * 12.0) / 12.0)
@@ -252,6 +300,29 @@ impl Plugin for HardwaveKickForge {
             .set_peaking_eq(1000.0, eq_mid_db, 0.7, self.sample_rate);
         self.eq_high
             .set_peaking_eq(8000.0, eq_high_db, 0.7, self.sample_rate);
+
+        // FX EQ bands: band 1 = low shelf, bands 2-3 = peaking, band 4 = high shelf
+        if fx_eq_on {
+            self.fx_eq1.set_low_shelf(fx_eq1_freq, fx_eq1_gain, self.sample_rate);
+            self.fx_eq2.set_peaking_eq(fx_eq2_freq, fx_eq2_gain, fx_eq2_q, self.sample_rate);
+            self.fx_eq3.set_peaking_eq(fx_eq3_freq, fx_eq3_gain, fx_eq3_q, self.sample_rate);
+            self.fx_eq4.set_high_shelf(fx_eq4_freq, fx_eq4_gain, self.sample_rate);
+        }
+
+        // FX Compressor
+        if fx_comp_on {
+            let thresh_linear = 10.0_f32.powf(fx_comp_thresh_db / 20.0);
+            self.fx_compressor.set_threshold(thresh_linear);
+            self.fx_compressor.set_ratio(fx_comp_ratio);
+            self.fx_compressor.set_attack_ms(fx_comp_attack);
+            self.fx_compressor.set_release_ms(fx_comp_release);
+        }
+
+        // FX Distortion
+        if fx_dist_on {
+            self.fx_distortion.set_type(fx_dist_type);
+            self.fx_distortion.set_drive(fx_dist_drive);
+        }
 
         // ── Process audio ────────────────────────────────────────────────────
         let num_samples = buffer.samples();
@@ -341,6 +412,29 @@ impl Plugin for HardwaveKickForge {
             mixed = self.eq_mid.process(mixed);
             mixed = self.eq_high.process(mixed);
 
+            // ── FX: Parametric EQ ──
+            if fx_eq_on {
+                mixed = self.fx_eq1.process(mixed);
+                mixed = self.fx_eq2.process(mixed);
+                mixed = self.fx_eq3.process(mixed);
+                mixed = self.fx_eq4.process(mixed);
+            }
+
+            // ── FX: Compressor ──
+            if fx_comp_on {
+                mixed = self.fx_compressor.process(mixed);
+                // Apply makeup gain
+                let makeup_linear = 10.0_f32.powf(fx_comp_makeup / 20.0);
+                mixed *= makeup_linear;
+            }
+
+            // ── FX: Post Distortion ──
+            if fx_dist_on {
+                let dry = mixed;
+                let wet = self.fx_distortion.process(mixed);
+                mixed = dry * (1.0 - fx_dist_mix) + wet * fx_dist_mix;
+            }
+
             // ── Soft limiter ──
             if limiter_on {
                 mixed = self.limiter.process(mixed);
@@ -386,6 +480,21 @@ impl Plugin for HardwaveKickForge {
                 master_low: eq_low_db,
                 master_mid: eq_mid_db,
                 master_high: eq_high_db,
+                fx_eq_enabled: fx_eq_on,
+                fx_eq1_freq, fx_eq1_gain, fx_eq1_q,
+                fx_eq2_freq, fx_eq2_gain, fx_eq2_q,
+                fx_eq3_freq, fx_eq3_gain, fx_eq3_q,
+                fx_eq4_freq, fx_eq4_gain, fx_eq4_q,
+                fx_comp_enabled: fx_comp_on,
+                fx_comp_threshold: fx_comp_thresh_db,
+                fx_comp_ratio,
+                fx_comp_attack,
+                fx_comp_release,
+                fx_comp_makeup,
+                fx_dist_enabled: fx_dist_on,
+                fx_dist_type: fx_dist_type as i32,
+                fx_dist_drive,
+                fx_dist_mix,
             };
             let _ = self.editor_packet_tx.try_send(packet);
         }

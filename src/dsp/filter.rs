@@ -200,6 +200,52 @@ impl BiquadFilter {
         self.a2 = a2 * inv_a0;
     }
 
+    /// Configure as a low-shelf filter.
+    pub fn set_low_shelf(&mut self, freq: f32, gain_db: f32, sample_rate: f32) {
+        if gain_db.abs() < 0.01 {
+            self.b0 = 1.0; self.b1 = 0.0; self.b2 = 0.0;
+            self.a1 = 0.0; self.a2 = 0.0;
+            return;
+        }
+        let a = 10.0_f32.powf(gain_db / 40.0);
+        let w0 = std::f32::consts::TAU * freq / sample_rate;
+        let cos_w0 = w0.cos();
+        let sin_w0 = w0.sin();
+        let alpha = sin_w0 / (2.0 * 0.707);
+        let two_sqrt_a_alpha = 2.0 * a.sqrt() * alpha;
+
+        let a0 = (a + 1.0) + (a - 1.0) * cos_w0 + two_sqrt_a_alpha;
+        let inv_a0 = 1.0 / a0;
+        self.b0 = (a * ((a + 1.0) - (a - 1.0) * cos_w0 + two_sqrt_a_alpha)) * inv_a0;
+        self.b1 = (2.0 * a * ((a - 1.0) - (a + 1.0) * cos_w0)) * inv_a0;
+        self.b2 = (a * ((a + 1.0) - (a - 1.0) * cos_w0 - two_sqrt_a_alpha)) * inv_a0;
+        self.a1 = (-2.0 * ((a - 1.0) + (a + 1.0) * cos_w0)) * inv_a0;
+        self.a2 = ((a + 1.0) + (a - 1.0) * cos_w0 - two_sqrt_a_alpha) * inv_a0;
+    }
+
+    /// Configure as a high-shelf filter.
+    pub fn set_high_shelf(&mut self, freq: f32, gain_db: f32, sample_rate: f32) {
+        if gain_db.abs() < 0.01 {
+            self.b0 = 1.0; self.b1 = 0.0; self.b2 = 0.0;
+            self.a1 = 0.0; self.a2 = 0.0;
+            return;
+        }
+        let a = 10.0_f32.powf(gain_db / 40.0);
+        let w0 = std::f32::consts::TAU * freq / sample_rate;
+        let cos_w0 = w0.cos();
+        let sin_w0 = w0.sin();
+        let alpha = sin_w0 / (2.0 * 0.707);
+        let two_sqrt_a_alpha = 2.0 * a.sqrt() * alpha;
+
+        let a0 = (a + 1.0) - (a - 1.0) * cos_w0 + two_sqrt_a_alpha;
+        let inv_a0 = 1.0 / a0;
+        self.b0 = (a * ((a + 1.0) + (a - 1.0) * cos_w0 + two_sqrt_a_alpha)) * inv_a0;
+        self.b1 = (-2.0 * a * ((a - 1.0) + (a + 1.0) * cos_w0)) * inv_a0;
+        self.b2 = (a * ((a + 1.0) + (a - 1.0) * cos_w0 - two_sqrt_a_alpha)) * inv_a0;
+        self.a1 = (2.0 * ((a - 1.0) - (a + 1.0) * cos_w0)) * inv_a0;
+        self.a2 = ((a + 1.0) - (a - 1.0) * cos_w0 - two_sqrt_a_alpha) * inv_a0;
+    }
+
     /// Process a single sample through the biquad.
     #[inline]
     pub fn process(&mut self, input: f32) -> f32 {

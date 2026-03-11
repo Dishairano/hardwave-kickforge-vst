@@ -85,6 +85,9 @@ pub struct KickForgeParams {
     #[id = "master_tuning"]
     pub master_tuning: FloatParam,
 
+    #[id = "master_octave"]
+    pub master_octave: IntParam,
+
     #[id = "master_limiter"]
     pub master_limiter: BoolParam,
 
@@ -96,6 +99,70 @@ pub struct KickForgeParams {
 
     #[id = "master_high"]
     pub master_high: FloatParam,
+
+    // ── FX: Parametric EQ (4 bands) ───────────────────────────────────────
+    #[id = "fx_eq_enabled"]
+    pub fx_eq_enabled: BoolParam,
+
+    #[id = "fx_eq1_freq"]
+    pub fx_eq1_freq: FloatParam,
+    #[id = "fx_eq1_gain"]
+    pub fx_eq1_gain: FloatParam,
+    #[id = "fx_eq1_q"]
+    pub fx_eq1_q: FloatParam,
+
+    #[id = "fx_eq2_freq"]
+    pub fx_eq2_freq: FloatParam,
+    #[id = "fx_eq2_gain"]
+    pub fx_eq2_gain: FloatParam,
+    #[id = "fx_eq2_q"]
+    pub fx_eq2_q: FloatParam,
+
+    #[id = "fx_eq3_freq"]
+    pub fx_eq3_freq: FloatParam,
+    #[id = "fx_eq3_gain"]
+    pub fx_eq3_gain: FloatParam,
+    #[id = "fx_eq3_q"]
+    pub fx_eq3_q: FloatParam,
+
+    #[id = "fx_eq4_freq"]
+    pub fx_eq4_freq: FloatParam,
+    #[id = "fx_eq4_gain"]
+    pub fx_eq4_gain: FloatParam,
+    #[id = "fx_eq4_q"]
+    pub fx_eq4_q: FloatParam,
+
+    // ── FX: Compressor ────────────────────────────────────────────────────
+    #[id = "fx_comp_enabled"]
+    pub fx_comp_enabled: BoolParam,
+
+    #[id = "fx_comp_threshold"]
+    pub fx_comp_threshold: FloatParam,
+
+    #[id = "fx_comp_ratio"]
+    pub fx_comp_ratio: FloatParam,
+
+    #[id = "fx_comp_attack"]
+    pub fx_comp_attack: FloatParam,
+
+    #[id = "fx_comp_release"]
+    pub fx_comp_release: FloatParam,
+
+    #[id = "fx_comp_makeup"]
+    pub fx_comp_makeup: FloatParam,
+
+    // ── FX: Post Distortion ───────────────────────────────────────────────
+    #[id = "fx_dist_enabled"]
+    pub fx_dist_enabled: BoolParam,
+
+    #[id = "fx_dist_type"]
+    pub fx_dist_type: EnumParam<DistortionType>,
+
+    #[id = "fx_dist_drive"]
+    pub fx_dist_drive: FloatParam,
+
+    #[id = "fx_dist_mix"]
+    pub fx_dist_mix: FloatParam,
 }
 
 impl Default for KickForgeParams {
@@ -299,6 +366,8 @@ impl Default for KickForgeParams {
             )
             .with_unit(" st"),
 
+            master_octave: IntParam::new("Octave", 0, IntRange::Linear { min: -4, max: 4 }),
+
             master_limiter: BoolParam::new("Limiter", true),
 
             master_low: FloatParam::new(
@@ -330,6 +399,135 @@ impl Default for KickForgeParams {
                 },
             )
             .with_unit(" dB"),
+
+            // ── FX: Parametric EQ ──────────────────────────────────────────
+            fx_eq_enabled: BoolParam::new("FX EQ On", false),
+
+            // Band 1: Low Shelf @ 80 Hz
+            fx_eq1_freq: FloatParam::new(
+                "EQ1 Freq",
+                80.0,
+                FloatRange::Skewed { min: 20.0, max: 500.0, factor: FloatRange::skew_factor(-1.0) },
+            ).with_unit(" Hz"),
+            fx_eq1_gain: FloatParam::new(
+                "EQ1 Gain",
+                0.0,
+                FloatRange::Linear { min: -18.0, max: 18.0 },
+            ).with_unit(" dB"),
+            fx_eq1_q: FloatParam::new(
+                "EQ1 Q",
+                0.7,
+                FloatRange::Skewed { min: 0.1, max: 10.0, factor: FloatRange::skew_factor(-1.0) },
+            ),
+
+            // Band 2: Peak @ 500 Hz
+            fx_eq2_freq: FloatParam::new(
+                "EQ2 Freq",
+                500.0,
+                FloatRange::Skewed { min: 100.0, max: 4000.0, factor: FloatRange::skew_factor(-1.0) },
+            ).with_unit(" Hz"),
+            fx_eq2_gain: FloatParam::new(
+                "EQ2 Gain",
+                0.0,
+                FloatRange::Linear { min: -18.0, max: 18.0 },
+            ).with_unit(" dB"),
+            fx_eq2_q: FloatParam::new(
+                "EQ2 Q",
+                0.7,
+                FloatRange::Skewed { min: 0.1, max: 10.0, factor: FloatRange::skew_factor(-1.0) },
+            ),
+
+            // Band 3: Peak @ 3 kHz
+            fx_eq3_freq: FloatParam::new(
+                "EQ3 Freq",
+                3000.0,
+                FloatRange::Skewed { min: 500.0, max: 12000.0, factor: FloatRange::skew_factor(-1.0) },
+            ).with_unit(" Hz")
+            .with_value_to_string(formatters::v2s_f32_hz_then_khz(0))
+            .with_string_to_value(formatters::s2v_f32_hz_then_khz()),
+            fx_eq3_gain: FloatParam::new(
+                "EQ3 Gain",
+                0.0,
+                FloatRange::Linear { min: -18.0, max: 18.0 },
+            ).with_unit(" dB"),
+            fx_eq3_q: FloatParam::new(
+                "EQ3 Q",
+                0.7,
+                FloatRange::Skewed { min: 0.1, max: 10.0, factor: FloatRange::skew_factor(-1.0) },
+            ),
+
+            // Band 4: High Shelf @ 10 kHz
+            fx_eq4_freq: FloatParam::new(
+                "EQ4 Freq",
+                10000.0,
+                FloatRange::Skewed { min: 2000.0, max: 20000.0, factor: FloatRange::skew_factor(-1.0) },
+            ).with_unit(" Hz")
+            .with_value_to_string(formatters::v2s_f32_hz_then_khz(0))
+            .with_string_to_value(formatters::s2v_f32_hz_then_khz()),
+            fx_eq4_gain: FloatParam::new(
+                "EQ4 Gain",
+                0.0,
+                FloatRange::Linear { min: -18.0, max: 18.0 },
+            ).with_unit(" dB"),
+            fx_eq4_q: FloatParam::new(
+                "EQ4 Q",
+                0.7,
+                FloatRange::Skewed { min: 0.1, max: 10.0, factor: FloatRange::skew_factor(-1.0) },
+            ),
+
+            // ── FX: Compressor ─────────────────────────────────────────────
+            fx_comp_enabled: BoolParam::new("FX Comp On", false),
+
+            fx_comp_threshold: FloatParam::new(
+                "Comp Threshold",
+                -12.0,
+                FloatRange::Linear { min: -40.0, max: 0.0 },
+            ).with_unit(" dB"),
+
+            fx_comp_ratio: FloatParam::new(
+                "Comp Ratio",
+                4.0,
+                FloatRange::Skewed { min: 1.0, max: 20.0, factor: FloatRange::skew_factor(-1.0) },
+            ).with_unit(":1"),
+
+            fx_comp_attack: FloatParam::new(
+                "Comp Attack",
+                5.0,
+                FloatRange::Skewed { min: 0.1, max: 100.0, factor: FloatRange::skew_factor(-1.5) },
+            ).with_unit(" ms"),
+
+            fx_comp_release: FloatParam::new(
+                "Comp Release",
+                50.0,
+                FloatRange::Skewed { min: 10.0, max: 500.0, factor: FloatRange::skew_factor(-1.0) },
+            ).with_unit(" ms"),
+
+            fx_comp_makeup: FloatParam::new(
+                "Comp Makeup",
+                0.0,
+                FloatRange::Linear { min: 0.0, max: 24.0 },
+            ).with_unit(" dB"),
+
+            // ── FX: Post Distortion ────────────────────────────────────────
+            fx_dist_enabled: BoolParam::new("FX Dist On", false),
+
+            fx_dist_type: EnumParam::new("FX Dist Type", DistortionType::Tanh),
+
+            fx_dist_drive: FloatParam::new(
+                "FX Dist Drive",
+                0.3,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            ).with_unit(" %")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+
+            fx_dist_mix: FloatParam::new(
+                "FX Dist Mix",
+                1.0,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            ).with_unit(" %")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
         }
     }
 }
