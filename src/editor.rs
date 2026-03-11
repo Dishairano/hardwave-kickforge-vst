@@ -151,7 +151,7 @@ pub struct KickForgeEditor {
     params: Arc<KickForgeParams>,
     packet_rx: Arc<Mutex<Receiver<KickForgePacket>>>,
     auth_token: Option<String>,
-    size: (u32, u32),
+    scale_factor: Mutex<f32>,
 }
 
 impl KickForgeEditor {
@@ -164,8 +164,13 @@ impl KickForgeEditor {
             params,
             packet_rx,
             auth_token,
-            size: (EDITOR_WIDTH, EDITOR_HEIGHT),
+            scale_factor: Mutex::new(1.0),
         }
+    }
+
+    fn scaled_size(&self) -> (u32, u32) {
+        let f = *self.scale_factor.lock();
+        ((EDITOR_WIDTH as f32 * f) as u32, (EDITOR_HEIGHT as f32 * f) as u32)
     }
 }
 
@@ -176,7 +181,7 @@ impl Editor for KickForgeEditor {
         context: Arc<dyn GuiContext>,
     ) -> Box<dyn std::any::Any + Send> {
         let packet_rx = Arc::clone(&self.packet_rx);
-        let (width, height) = self.size;
+        let (width, height) = self.scaled_size();
 
         // Build the URL with token and version
         let version = env!("CARGO_PKG_VERSION");
@@ -203,11 +208,12 @@ impl Editor for KickForgeEditor {
     }
 
     fn size(&self) -> (u32, u32) {
-        self.size
+        self.scaled_size()
     }
 
-    fn set_scale_factor(&self, _factor: f32) -> bool {
-        false
+    fn set_scale_factor(&self, factor: f32) -> bool {
+        *self.scale_factor.lock() = factor;
+        true
     }
 
     fn param_value_changed(&self, _id: &str, _normalized_value: f32) {}
