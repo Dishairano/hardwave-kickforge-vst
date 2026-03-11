@@ -39,6 +39,7 @@ pub struct KickForgePacket {
     // Master
     pub master_volume: f32,
     pub master_tuning: f32,
+    pub master_octave: i32,
     pub master_limiter: bool,
     pub master_low: f32,
     pub master_mid: f32,

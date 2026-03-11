@@ -109,6 +109,7 @@ fn build_param_map(params: &KickForgeParams) -> HashMap<String, nih_plug::prelud
     // Master
     map.insert("masterVolume".into(), params.master_volume.as_ptr());
     map.insert("masterTuning".into(), params.master_tuning.as_ptr());
+    map.insert("masterOctave".into(), params.master_octave.as_ptr());
     map.insert("masterLimiter".into(), params.master_limiter.as_ptr());
     map.insert("masterLow".into(), params.master_low.as_ptr());
     map.insert("masterMid".into(), params.master_mid.as_ptr());

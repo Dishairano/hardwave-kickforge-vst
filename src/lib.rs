@@ -61,6 +61,9 @@ pub struct HardwaveKickForge {
     // Velocity of last note-on (0.0 - 1.0)
     velocity: f32,
 
+    // MIDI note number of last note-on (for pitch tracking)
+    note_freq_ratio: f32,
+
     sample_rate: f32,
 
     // Plugin -> Editor communication
@@ -103,6 +106,7 @@ impl Default for HardwaveKickForge {
             eq_high: BiquadFilter::new(),
             limiter: SoftLimiter::new(),
             velocity: 1.0,
+            note_freq_ratio: 1.0,
             sample_rate: sr,
             editor_packet_tx: pkt_tx,
             editor_packet_rx: Arc::new(Mutex::new(pkt_rx)),
@@ -207,13 +211,16 @@ impl Plugin for HardwaveKickForge {
 
         let master_vol = self.params.master_volume.value();
         let master_tuning = self.params.master_tuning.value();
+        let master_octave = self.params.master_octave.value();
         let limiter_on = self.params.master_limiter.value();
         let eq_low_db = self.params.master_low.value();
         let eq_mid_db = self.params.master_mid.value();
         let eq_high_db = self.params.master_high.value();
 
         // ── Update DSP state from params ─────────────────────────────────────
-        let tuning_factor = 2.0_f32.powf(master_tuning / 12.0);
+        // Combine octave, fine tuning (semitones), and MIDI note tracking
+        let tuning_factor = 2.0_f32.powf((master_tuning + master_octave as f32 * 12.0) / 12.0)
+            * self.note_freq_ratio;
         self.body_pitch_env
             .set_start_freq(body_pitch_start * tuning_factor);
         self.body_pitch_env
@@ -262,8 +269,10 @@ impl Plugin for HardwaveKickForge {
                     break;
                 }
 
-                if let NoteEvent::NoteOn { velocity: vel, .. } = event {
+                if let NoteEvent::NoteOn { velocity: vel, note, .. } = event {
                     self.velocity = vel;
+                    // Track MIDI note pitch: C5 (note 60) = neutral (ratio 1.0)
+                    self.note_freq_ratio = 2.0_f32.powf((note as f32 - 60.0) / 12.0);
 
                     // Trigger body
                     self.body_osc.reset();
@@ -372,6 +381,7 @@ impl Plugin for HardwaveKickForge {
                 sub_decay: sub_decay_ms,
                 master_volume: master_vol,
                 master_tuning,
+                master_octave: master_octave as i32,
                 master_limiter: limiter_on,
                 master_low: eq_low_db,
                 master_mid: eq_mid_db,
