@@ -17,8 +17,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::auth;
-use crate::params::KickForgeParams;
-use crate::protocol::KickForgePacket;
+use crate::params::{KickForgeParams, NUM_FX_SLOTS};
+use crate::protocol::{FxSlotState, KickForgePacket};
 
 const KICKFORGE_URL: &str = "http://46.225.219.184:8080/vst/kickforge";
 const EDITOR_WIDTH: u32 = 1100;
@@ -195,17 +195,20 @@ impl Editor for KickForgeEditor {
         // Build param map for IPC handler
         let param_map = Arc::new(build_param_map(&self.params));
 
+        // Build init script with current param state snapshot
+        let init_js = ipc_init_script(&self.params);
+
         // Extract raw handle value BEFORE spawning threads (ParentWindowHandle isn't Send)
         let raw_handle = extract_raw_handle(&parent);
 
         #[cfg(target_os = "windows")]
         {
-            spawn_windows(raw_handle, url, width, height, packet_rx, context, param_map)
+            spawn_windows(raw_handle, url, width, height, packet_rx, context, param_map, init_js)
         }
 
         #[cfg(not(target_os = "windows"))]
         {
-            spawn_unix(raw_handle, url, width, height, packet_rx, context, param_map)
+            spawn_unix(raw_handle, url, width, height, packet_rx, context, param_map, init_js)
         }
     }
 
@@ -236,12 +239,77 @@ fn extract_raw_handle(parent: &ParentWindowHandle) -> usize {
     }
 }
 
+/// Build a KickForgePacket from the current DAW-persisted param values.
+/// Called at editor open time so the webview starts with the correct state.
+fn snapshot_params(params: &KickForgeParams) -> KickForgePacket {
+    KickForgePacket {
+        click_enabled: params.click_enabled.value(),
+        click_type: params.click_type.value() as i32,
+        click_volume: params.click_volume.value(),
+        click_pitch: params.click_pitch.value(),
+        click_decay: params.click_decay.value(),
+        click_filter_freq: params.click_filter_freq.value(),
+        body_pitch_start: params.body_pitch_start.value(),
+        body_pitch_end: params.body_pitch_end.value(),
+        body_pitch_decay: params.body_pitch_decay.value(),
+        body_pitch_curve: params.body_pitch_curve.value() as i32,
+        body_waveform: params.body_waveform.value() as i32,
+        body_drive: params.body_drive.value(),
+        body_distortion_type: params.body_distortion_type.value() as i32,
+        body_decay: params.body_decay.value(),
+        body_volume: params.body_volume.value(),
+        body_tone: params.body_tone.value(),
+        body_resonance: params.body_resonance.value(),
+        sub_enabled: params.sub_enabled.value(),
+        sub_frequency: params.sub_frequency.value(),
+        sub_volume: params.sub_volume.value(),
+        sub_decay: params.sub_decay.value(),
+        noise_enabled: params.noise_enabled.value(),
+        noise_type: params.noise_type.value() as i32,
+        noise_volume: params.noise_volume.value(),
+        noise_decay: params.noise_decay.value(),
+        noise_filter_freq: params.noise_filter_freq.value(),
+        click_solo: params.click_solo.value(),
+        body_solo: params.body_solo.value(),
+        sub_solo: params.sub_solo.value(),
+        noise_solo: params.noise_solo.value(),
+        vel_to_decay: params.vel_to_decay.value(),
+        vel_to_pitch: params.vel_to_pitch.value(),
+        vel_to_drive: params.vel_to_drive.value(),
+        vel_to_click: params.vel_to_click.value(),
+        fx_slots: (0..NUM_FX_SLOTS)
+            .map(|i| FxSlotState {
+                slot_type: params.fx_slots[i].slot_type.value(),
+                enabled: params.fx_slots[i].enabled.value(),
+                p1: params.fx_slots[i].p1.value(),
+                p2: params.fx_slots[i].p2.value(),
+                p3: params.fx_slots[i].p3.value(),
+                p4: params.fx_slots[i].p4.value(),
+                p5: params.fx_slots[i].p5.value(),
+                p6: params.fx_slots[i].p6.value(),
+            })
+            .collect(),
+        comp_gain_reduction: 0.0,
+        waveform_buffer: Vec::new(),
+        master_volume: params.master_volume.value(),
+        master_tuning: params.master_tuning.value(),
+        master_octave: params.master_octave.value() as i32,
+        master_limiter: params.master_limiter.value(),
+        master_low: params.master_low.value(),
+        master_mid: params.master_mid.value(),
+        master_high: params.master_high.value(),
+    }
+}
+
 /// IPC init script injected into the WebView.
-fn ipc_init_script() -> String {
+fn ipc_init_script(params: &KickForgeParams) -> String {
+    let snapshot = snapshot_params(params);
+    let initial_json = serde_json::to_string(&snapshot).unwrap_or_else(|_| "null".into());
+
     format!(
         r#"
     window.__HARDWAVE_VST = true;
-    window.__HARDWAVE_VST_VERSION = '{}';
+    window.__HARDWAVE_VST_VERSION = '{version}';
     window.__hardwave = {{
         setParam: function(key, value) {{
             var v = value;
@@ -252,8 +320,26 @@ fn ipc_init_script() -> String {
             window.ipc.postMessage('saveToken:' + token);
         }}
     }};
+
+    /* Push DAW-persisted state as soon as the page defines __onKickForgePacket */
+    (function() {{
+        var _init = {initial_json};
+        function pushInit() {{
+            if (window.__onKickForgePacket) {{
+                window.__onKickForgePacket(_init);
+            }} else {{
+                setTimeout(pushInit, 50);
+            }}
+        }}
+        if (document.readyState === 'complete') {{
+            pushInit();
+        }} else {{
+            window.addEventListener('load', pushInit);
+        }}
+    }})();
     "#,
-        env!("CARGO_PKG_VERSION")
+        version = env!("CARGO_PKG_VERSION"),
+        initial_json = initial_json,
     )
 }
 
@@ -301,6 +387,7 @@ fn spawn_windows(
     packet_rx: Arc<Mutex<Receiver<KickForgePacket>>>,
     context: Arc<dyn GuiContext>,
     param_map: Arc<HashMap<String, nih_plug::prelude::ParamPtr>>,
+    base_init_js: String,
 ) -> Box<dyn std::any::Any + Send> {
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -381,7 +468,7 @@ fn spawn_windows(
         port
     );
 
-    let init_js = format!("{}\n{}", ipc_init_script(), poll_script);
+    let init_js = format!("{}\n{}", base_init_js, poll_script);
     let ctx = Arc::clone(&context);
     let pmap = Arc::clone(&param_map);
 
@@ -442,6 +529,7 @@ fn spawn_unix(
     packet_rx: Arc<Mutex<Receiver<KickForgePacket>>>,
     context: Arc<dyn GuiContext>,
     param_map: Arc<HashMap<String, nih_plug::prelude::ParamPtr>>,
+    init_js: String,
 ) -> Box<dyn std::any::Any + Send> {
     let running = Arc::new(AtomicBool::new(true));
     let running_clone = Arc::clone(&running);
@@ -458,7 +546,7 @@ fn spawn_unix(
 
         let webview = match wry::WebViewBuilder::new()
             .with_url(&url)
-            .with_initialization_script(&ipc_init_script())
+            .with_initialization_script(&init_js)
             .with_ipc_handler(move |msg| {
                 handle_ipc(&ctx, &pmap, &msg.body());
             })
