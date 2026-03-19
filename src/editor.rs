@@ -20,7 +20,7 @@ use crate::auth;
 use crate::params::{KickForgeParams, NUM_FX_SLOTS};
 use crate::protocol::{FxSlotState, KickForgePacket};
 
-const KICKFORGE_URL: &str = "http://46.225.219.184:8080/vst/kickforge";
+const KICKFORGE_URL: &str = "https://kickforge.hardwavestudios.com";
 const EDITOR_WIDTH: u32 = 1100;
 const EDITOR_HEIGHT: u32 = 700;
 
