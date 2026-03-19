@@ -490,8 +490,10 @@ impl Plugin for HardwaveKickForge {
             self.body_osc.set_frequency(body_freq);
             let body_raw = self.body_osc.process();
 
-            // Split-band distortion: separate sub from mid/hi so distortion
-            // only affects the upper frequencies. The sub stays clean and punchy.
+            // Split-band distortion: LP extracts low frequencies to bypass
+            // distortion (stays clean), HP extracts mid/hi which gets distorted.
+            // The full body signal is always present — split-band only controls
+            // *what gets distorted*, not what is audible.
             let clean_sub = self.split_lp.process(body_raw);
             let mid_hi = self.split_hp.process(body_raw);
 
@@ -503,9 +505,12 @@ impl Plugin for HardwaveKickForge {
             // Tone filter (low-pass) shapes the distorted upper content
             let mid_hi_filtered = self.body_tone_filter.process(mid_hi_distorted);
 
-            // Recombine: clean sub underneath the distorted mids/highs
-            let sub_mix = if sub_on { sub_vol } else { 0.0 };
-            let body_combined = mid_hi_filtered + clean_sub * sub_mix;
+            // Recombine: clean sub + distorted mids/highs = full body
+            // Sub volume controls how much clean low-end is blended in.
+            // When sub is off, the clean_sub portion is still included at
+            // unity to preserve the full body signal — sub_vol only boosts it.
+            let sub_gain = if sub_on { sub_vol } else { 1.0 };
+            let body_combined = mid_hi_filtered + clean_sub * sub_gain;
 
             // Amp envelope with hold: during hold, level stays at 1.0
             let body_sample = body_combined * self.body_amp_level * body_vol;
