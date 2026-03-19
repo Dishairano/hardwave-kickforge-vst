@@ -45,13 +45,22 @@ pub struct HardwaveKickForge {
     body_tone_filter: SvfFilter,
     body_amp_level: f32,
     body_amp_decay: f32,
+    /// Hold counter: while > 0, body_amp_level stays at 1.0 (the "punch window").
+    body_hold_remaining: u32,
+
+    // DSP — Split-band distortion filters
+    /// LP filter to extract clean sub before distortion
+    split_lp: SvfFilter,
+    /// HP filter to extract mid/hi for distortion
+    split_hp: SvfFilter,
 
     // DSP — Click layer
     click: Click,
 
-    // DSP — Sub layer
+    // DSP — Sub layer (legacy — kept for struct compat, no longer used for synthesis)
     sub_osc: Oscillator,
     sub_amp_level: f32,
+    #[allow(dead_code)]
     sub_amp_decay: f32,
 
     // DSP — Noise layer
@@ -118,6 +127,9 @@ impl Default for HardwaveKickForge {
             body_tone_filter: SvfFilter::new(sr),
             body_amp_level: 0.0,
             body_amp_decay: decay_coeff(sr, 500.0),
+            body_hold_remaining: 0,
+            split_lp: SvfFilter::new(sr),
+            split_hp: SvfFilter::new(sr),
             click: Click::new(sr),
             sub_osc: Oscillator::new(sr),
             sub_amp_level: 0.0,
@@ -190,6 +202,8 @@ impl Plugin for HardwaveKickForge {
         self.body_osc.set_sample_rate(self.sample_rate);
         self.body_pitch_env.set_sample_rate(self.sample_rate);
         self.body_tone_filter.set_sample_rate(self.sample_rate);
+        self.split_lp.set_sample_rate(self.sample_rate);
+        self.split_hp.set_sample_rate(self.sample_rate);
         self.click.set_sample_rate(self.sample_rate);
         self.sub_osc.set_sample_rate(self.sample_rate);
         self.noise_gen.set_sample_rate(self.sample_rate);
@@ -209,6 +223,9 @@ impl Plugin for HardwaveKickForge {
         self.body_oversampler.reset();
         self.body_tone_filter.reset();
         self.body_amp_level = 0.0;
+        self.body_hold_remaining = 0;
+        self.split_lp.reset();
+        self.split_hp.reset();
         self.click.reset();
         self.sub_osc.reset();
         self.sub_amp_level = 0.0;
@@ -257,11 +274,15 @@ impl Plugin for HardwaveKickForge {
         let body_vol = self.params.body_volume.value();
         let body_tone = self.params.body_tone.value();
         let body_resonance = self.params.body_resonance.value();
+        let body_feedback = self.params.body_feedback.value();
+        let body_hold_ms = self.params.body_hold.value();
+        let body_split_freq = self.params.body_split_freq.value();
 
         let sub_on = self.params.sub_enabled.value();
-        let sub_freq = self.params.sub_frequency.value();
         let sub_vol = self.params.sub_volume.value();
-        let sub_decay_ms = self.params.sub_decay.value();
+        // Legacy params — read but not used for separate osc anymore
+        let _sub_freq = self.params.sub_frequency.value();
+        let _sub_decay_ms = self.params.sub_decay.value();
 
         let noise_on = self.params.noise_enabled.value();
         let noise_type = self.params.noise_type.value();
@@ -322,6 +343,7 @@ impl Plugin for HardwaveKickForge {
         self.body_pitch_env.set_curve(body_pitch_curve);
 
         self.body_osc.set_waveform(body_waveform);
+        self.body_osc.set_feedback(body_feedback);
         self.body_distortion.set_drive(eff_drive);
         self.body_distortion.set_type(body_dist_type);
         self.body_amp_decay = decay_coeff(self.sample_rate, eff_decay_ms);
@@ -329,14 +351,21 @@ impl Plugin for HardwaveKickForge {
         self.body_tone_filter.set_cutoff(body_tone);
         self.body_tone_filter.set_resonance(body_resonance);
 
+        // Split-band distortion: LP extracts clean sub, HP extracts mid/hi
+        {
+            use crate::dsp::filter::FilterMode;
+            self.split_lp.set_cutoff(body_split_freq);
+            self.split_lp.set_mode(FilterMode::LowPass);
+            self.split_lp.set_resonance(0.0);
+            self.split_hp.set_cutoff(body_split_freq);
+            self.split_hp.set_mode(FilterMode::HighPass);
+            self.split_hp.set_resonance(0.0);
+        }
+
         self.click.set_click_type(click_type_val);
         self.click.set_pitch(click_pitch);
         self.click.set_decay_ms(click_decay);
         self.click.set_filter_freq(click_filter);
-
-        self.sub_osc
-            .set_frequency(sub_freq * tuning_factor);
-        self.sub_amp_decay = decay_coeff(self.sample_rate, sub_decay_ms);
 
         self.noise_gen.set_noise_type(noise_type);
         self.noise_gen.set_filter_freq(noise_filter);
@@ -426,20 +455,20 @@ impl Plugin for HardwaveKickForge {
                     // Track MIDI note pitch: C5 (note 60) = neutral (ratio 1.0)
                     self.note_freq_ratio = 2.0_f32.powf((note as f32 - 60.0) / 12.0);
 
-                    // Trigger body
+                    // Trigger body with hold
                     self.body_osc.reset();
                     self.body_pitch_env.trigger();
                     self.body_amp_level = 1.0;
+                    self.body_hold_remaining =
+                        (self.sample_rate * body_hold_ms / 1000.0) as u32;
+
+                    // Reset split filters on retrigger for clean transient
+                    self.split_lp.reset();
+                    self.split_hp.reset();
 
                     // Trigger click
                     if click_on {
                         self.click.trigger();
-                    }
-
-                    // Trigger sub
-                    if sub_on {
-                        self.sub_osc.reset();
-                        self.sub_amp_level = 1.0;
                     }
 
                     // Trigger noise
@@ -456,40 +485,43 @@ impl Plugin for HardwaveKickForge {
                 next_event = context.next_event();
             }
 
-            // ── Body: pitch env → oscillator → distortion (oversampled) → tone filter ──
+            // ── Body: pitch env → osc (with FM feedback) → split-band distortion ──
             let body_freq = self.body_pitch_env.process();
             self.body_osc.set_frequency(body_freq);
             let body_raw = self.body_osc.process();
 
-            // Oversampled distortion to reduce aliasing
-            let body_distorted = self
+            // Split-band distortion: separate sub from mid/hi so distortion
+            // only affects the upper frequencies. The sub stays clean and punchy.
+            let clean_sub = self.split_lp.process(body_raw);
+            let mid_hi = self.split_hp.process(body_raw);
+
+            // Oversample the mid/hi through distortion to reduce aliasing
+            let mid_hi_distorted = self
                 .body_oversampler
-                .process(body_raw, |s| self.body_distortion.process(s));
+                .process(mid_hi, |s| self.body_distortion.process(s));
 
-            // Tone filter (low-pass) on distorted body
-            let body_filtered = self.body_tone_filter.process(body_distorted);
+            // Tone filter (low-pass) shapes the distorted upper content
+            let mid_hi_filtered = self.body_tone_filter.process(mid_hi_distorted);
 
-            let body_sample = body_filtered * self.body_amp_level * body_vol;
-            self.body_amp_level *= self.body_amp_decay;
-            if self.body_amp_level < 0.0001 {
-                self.body_amp_level = 0.0;
+            // Recombine: clean sub underneath the distorted mids/highs
+            let sub_mix = if sub_on { sub_vol } else { 0.0 };
+            let body_combined = mid_hi_filtered + clean_sub * sub_mix;
+
+            // Amp envelope with hold: during hold, level stays at 1.0
+            let body_sample = body_combined * self.body_amp_level * body_vol;
+            if self.body_hold_remaining > 0 {
+                self.body_hold_remaining -= 1;
+                // body_amp_level stays at 1.0 during hold
+            } else {
+                self.body_amp_level *= self.body_amp_decay;
+                if self.body_amp_level < 0.0001 {
+                    self.body_amp_level = 0.0;
+                }
             }
 
             // ── Click transient ──
             let click_sample = if click_on {
                 self.click.process() * eff_click_vol
-            } else {
-                0.0
-            };
-
-            // ── Sub ──
-            let sub_sample = if sub_on {
-                let s = self.sub_osc.process() * self.sub_amp_level * sub_vol;
-                self.sub_amp_level *= self.sub_amp_decay;
-                if self.sub_amp_level < 0.0001 {
-                    self.sub_amp_level = 0.0;
-                }
-                s
             } else {
                 0.0
             };
@@ -507,15 +539,15 @@ impl Plugin for HardwaveKickForge {
             };
 
             // ── Mix layers with solo logic ──
+            // Sub is now part of the body (via split-band), not a separate layer
             let mut mixed = if any_solo {
                 let mut m = 0.0;
                 if click_solo { m += click_sample; }
-                if body_solo { m += body_sample; }
-                if sub_solo { m += sub_sample; }
+                if body_solo || sub_solo { m += body_sample; }
                 if noise_solo { m += noise_sample; }
                 m * master_vol * vel
             } else {
-                (body_sample + click_sample + sub_sample + noise_sample) * master_vol * vel
+                (body_sample + click_sample + noise_sample) * master_vol * vel
             };
 
             // ── Master 3-band EQ ──
@@ -602,10 +634,13 @@ impl Plugin for HardwaveKickForge {
                 body_volume: body_vol,
                 body_tone,
                 body_resonance,
+                body_feedback,
+                body_hold: body_hold_ms,
+                body_split_freq,
                 sub_enabled: sub_on,
-                sub_frequency: sub_freq,
+                sub_frequency: _sub_freq,
                 sub_volume: sub_vol,
-                sub_decay: sub_decay_ms,
+                sub_decay: _sub_decay_ms,
                 noise_enabled: noise_on,
                 noise_type: noise_type as i32,
                 noise_volume: noise_vol,

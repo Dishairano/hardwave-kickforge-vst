@@ -43,6 +43,9 @@ pub struct KickForgePacket {
     pub body_volume: f32,
     pub body_tone: f32,
     pub body_resonance: f32,
+    pub body_feedback: f32,
+    pub body_hold: f32,
+    pub body_split_freq: f32,
 
     // Sub layer
     pub sub_enabled: bool,

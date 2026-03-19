@@ -114,16 +114,36 @@ pub struct KickForgeParams {
     #[id = "body_resonance"]
     pub body_resonance: FloatParam,
 
-    // ── Sub layer ───────────────────────────────────────────────────────────
+    /// Oscillator self-modulation (FM feedback). Thickens the body tone
+    /// with additional harmonics before distortion.
+    #[id = "body_feedback"]
+    pub body_feedback: FloatParam,
+
+    /// Hold time in ms — the body stays at full level for this long before
+    /// decay starts. Creates the "punch window" that defines a kick vs a laser.
+    #[id = "body_hold"]
+    pub body_hold: FloatParam,
+
+    /// Frequency (Hz) below which the signal is kept clean during distortion.
+    /// Above this frequency, the body is distorted normally. The clean sub
+    /// is mixed back in underneath, keeping the low-end tight.
+    #[id = "body_split_freq"]
+    pub body_split_freq: FloatParam,
+
+    // ── Sub layer (legacy — now controls the clean sub from split-band) ────
+    /// When enabled, the clean sub from split-band distortion is mixed in.
     #[id = "sub_enabled"]
     pub sub_enabled: BoolParam,
 
-    #[id = "sub_frequency"]
-    pub sub_frequency: FloatParam,
-
+    /// Controls the level of the clean sub component.
     #[id = "sub_volume"]
     pub sub_volume: FloatParam,
 
+    /// Legacy param kept for project compat — no longer drives a separate osc.
+    #[id = "sub_frequency"]
+    pub sub_frequency: FloatParam,
+
+    /// Legacy param kept for project compat.
     #[id = "sub_decay"]
     pub sub_decay: FloatParam,
 
@@ -271,6 +291,20 @@ impl Default for KickForgeParams {
             ).with_unit(" %")
             .with_value_to_string(formatters::v2s_f32_percentage(0))
             .with_string_to_value(formatters::s2v_f32_percentage()),
+            body_feedback: FloatParam::new(
+                "Body Feedback", 0.0,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            ).with_unit(" %")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+            body_hold: FloatParam::new(
+                "Body Hold", 10.0,
+                FloatRange::Skewed { min: 0.0, max: 80.0, factor: FloatRange::skew_factor(-1.0) },
+            ).with_unit(" ms"),
+            body_split_freq: FloatParam::new(
+                "Sub Split", 120.0,
+                FloatRange::Skewed { min: 40.0, max: 300.0, factor: FloatRange::skew_factor(-1.0) },
+            ).with_unit(" Hz"),
 
             // ── Sub ─────────────────────────────────────────────────────────
             sub_enabled: BoolParam::new("Sub On", true),

@@ -25,6 +25,9 @@ pub struct Oscillator {
     phase: f32,
     frequency: f32,
     waveform: Waveform,
+    /// FM feedback: previous output fed back into phase for self-modulation.
+    feedback_amount: f32,
+    feedback_sample: f32,
 }
 
 impl Oscillator {
@@ -34,6 +37,8 @@ impl Oscillator {
             phase: 0.0,
             frequency: 50.0,
             waveform: Waveform::Sine,
+            feedback_amount: 0.0,
+            feedback_sample: 0.0,
         }
     }
 
@@ -49,13 +54,23 @@ impl Oscillator {
         self.waveform = wf;
     }
 
+    /// Set FM self-modulation amount (0.0 = clean, 1.0 = heavy).
+    /// Feeds the oscillator output back into its own phase, thickening the
+    /// tone with additional harmonics before it even reaches distortion.
+    pub fn set_feedback(&mut self, amount: f32) {
+        self.feedback_amount = amount.clamp(0.0, 1.0);
+    }
+
     /// Generate one sample at the current frequency using the selected waveform.
     pub fn process(&mut self) -> f32 {
-        let p = self.phase;
+        // Apply self-modulation: shift phase by previous output * feedback amount.
+        // Scale feedback to max ~1.5 radians / TAU for musical range.
+        let fb_phase = self.feedback_sample * self.feedback_amount * 0.24;
+        let p = (self.phase + fb_phase).fract().abs();
+
         let sample = match self.waveform {
             Waveform::Sine => (p * std::f32::consts::TAU).sin(),
             Waveform::Triangle => {
-                // Triangle: rises linearly 0..0.5, falls 0.5..1.0
                 if p < 0.5 {
                     4.0 * p - 1.0
                 } else {
@@ -63,22 +78,19 @@ impl Oscillator {
                 }
             }
             Waveform::Saw => {
-                // Saw: rises from -1 to +1 over the period
                 2.0 * p - 1.0
             }
             Waveform::Pulse => {
-                // Pulse wave with 50% duty cycle
                 if p < 0.5 { 1.0 } else { -1.0 }
             }
             Waveform::SineFold => {
-                // Sine with foldback distortion: amplify sine then fold
                 let raw = (p * std::f32::consts::TAU).sin() * 2.5;
                 sine_fold(raw)
             }
         };
 
+        self.feedback_sample = sample;
         self.phase += self.frequency / self.sample_rate;
-        // Keep phase in [0, 1) to avoid floating-point precision loss over time
         self.phase -= self.phase.floor();
 
         sample
@@ -87,6 +99,7 @@ impl Oscillator {
     /// Reset the oscillator phase (call on note-on for consistent attack).
     pub fn reset(&mut self) {
         self.phase = 0.0;
+        self.feedback_sample = 0.0;
     }
 }
 
