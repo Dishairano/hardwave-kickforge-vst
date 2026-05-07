@@ -99,6 +99,14 @@ fn build_param_map(params: &KickForgeParams) -> HashMap<String, nih_plug::prelud
     map.insert("bodyVolume".into(), params.body_volume.as_ptr());
     map.insert("bodyTone".into(), params.body_tone.as_ptr());
     map.insert("bodyResonance".into(), params.body_resonance.as_ptr());
+    // FM Fb / Hold / Split knobs were missing from the IPC map. The webview
+    // emitted setParam('bodyFeedback', ...) but Rust silently dropped the
+    // message because the key wasn't registered, so the next state packet
+    // echoed the unchanged value back and the knob snapped to its original
+    // position — the "freeze in the same place" beta-tester report.
+    map.insert("bodyFeedback".into(), params.body_feedback.as_ptr());
+    map.insert("bodyHold".into(), params.body_hold.as_ptr());
+    map.insert("bodySplitFreq".into(), params.body_split_freq.as_ptr());
 
     // Sub layer
     map.insert("subEnabled".into(), params.sub_enabled.as_ptr());
