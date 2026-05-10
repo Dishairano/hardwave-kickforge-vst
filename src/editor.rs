@@ -13,7 +13,47 @@ use nih_plug::editor::Editor;
 use nih_plug::prelude::{GuiContext, ParentWindowHandle, Param};
 use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
+/// Process-unique identifier for a plug-in instance. Each KickForgeEditor
+/// gets a fresh one so two instances of KickForge in the same DAW project
+/// don't share a WebView2 user-data folder (the documented anti-pattern
+/// that produced the FL Studio 50/50 crash).
+fn unique_instance_id() -> String {
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let pid = std::process::id();
+    format!("{}-{}-{}", pid, nanos, n)
+}
+
+/// Cooperative shutdown signal — wakes worker threads immediately when Drop
+/// signals shutdown so editor close takes <1ms instead of polling on a
+/// 5–16ms tick.
+struct ShutdownSignal {
+    flag: parking_lot::Mutex<bool>,
+    cv: parking_lot::Condvar,
+}
+
+impl ShutdownSignal {
+    fn new() -> Self { Self { flag: parking_lot::Mutex::new(false), cv: parking_lot::Condvar::new() } }
+    fn signal(&self) {
+        let mut g = self.flag.lock();
+        *g = true;
+        self.cv.notify_all();
+    }
+    fn is_shutdown(&self) -> bool { *self.flag.lock() }
+    fn wait(&self, timeout: Duration) -> bool {
+        let mut g = self.flag.lock();
+        if *g { return true; }
+        let _ = self.cv.wait_for(&mut g, timeout);
+        *g
+    }
+}
 use std::sync::Arc;
 
 use crate::auth;
@@ -42,14 +82,16 @@ impl raw_window_handle::HasWindowHandle for RwhWrapper {
 
         #[cfg(target_os = "macos")]
         let raw = {
-            let ns_view = std::ptr::NonNull::new(self.0 as *mut _).expect("null NSView");
+            let ns_view = std::ptr::NonNull::new(self.0 as *mut _)
+                .ok_or(raw_window_handle::HandleError::Unavailable)?;
             let h = raw_window_handle::AppKitWindowHandle::new(ns_view);
             RawWindowHandle::AppKit(h)
         };
 
         #[cfg(target_os = "windows")]
         let raw = {
-            let hwnd = std::num::NonZeroIsize::new(self.0 as isize).expect("null HWND");
+            let hwnd = std::num::NonZeroIsize::new(self.0 as isize)
+                .ok_or(raw_window_handle::HandleError::Unavailable)?;
             let h = raw_window_handle::Win32WindowHandle::new(hwnd);
             RawWindowHandle::Win32(h)
         };
@@ -162,6 +204,8 @@ pub struct KickForgeEditor {
     packet_rx: Arc<Mutex<Receiver<KickForgePacket>>>,
     auth_token: Option<String>,
     scale_factor: Mutex<f32>,
+    /// Process-unique instance ID for the WebView2 user-data folder.
+    instance_id: String,
 }
 
 impl KickForgeEditor {
@@ -175,6 +219,7 @@ impl KickForgeEditor {
             packet_rx,
             auth_token,
             scale_factor: Mutex::new(1.0),
+            instance_id: unique_instance_id(),
         }
     }
 
@@ -211,12 +256,12 @@ impl Editor for KickForgeEditor {
 
         #[cfg(target_os = "windows")]
         {
-            spawn_windows(raw_handle, url, width, height, packet_rx, context, param_map, init_js)
+            spawn_windows(raw_handle, url, width, height, packet_rx, context, param_map, init_js, self.instance_id.clone())
         }
 
         #[cfg(not(target_os = "windows"))]
         {
-            spawn_unix(raw_handle, url, width, height, packet_rx, context, param_map, init_js)
+            spawn_unix(raw_handle, url, width, height, packet_rx, context, param_map, init_js, self.instance_id.clone())
         }
     }
 
@@ -385,11 +430,14 @@ fn handle_ipc(
 
 // ─── Windows: TCP packet server approach ────────────────────────────────────
 
+/// Per-instance WebView2 user-data folder. Two KickForge instances on
+/// different tracks now write to different folders, eliminating the
+/// documented WebView2 anti-pattern that produced the FL Studio race.
 #[cfg(target_os = "windows")]
-fn webview2_data_dir() -> std::path::PathBuf {
+fn webview2_data_dir(instance_id: &str) -> std::path::PathBuf {
     dirs::data_local_dir()
-        .map(|d| d.join("Hardwave").join("KickForge").join("WebView2"))
-        .unwrap_or_else(|| std::path::PathBuf::from("C:\\HardwaveWebView2Data"))
+        .map(|d| d.join("Hardwave").join("KickForge").join("WebView2").join(instance_id))
+        .unwrap_or_else(|| std::path::PathBuf::from("C:\\HardwaveWebView2Data").join(instance_id))
 }
 
 #[cfg(target_os = "windows")]
@@ -402,16 +450,17 @@ fn spawn_windows(
     context: Arc<dyn GuiContext>,
     param_map: Arc<HashMap<String, nih_plug::prelude::ParamPtr>>,
     base_init_js: String,
+    instance_id: String,
 ) -> Box<dyn std::any::Any + Send> {
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
-    let running = Arc::new(AtomicBool::new(true));
-    let running_clone = Arc::clone(&running);
+    let shutdown = Arc::new(ShutdownSignal::new());
+    let shutdown_for_handle = Arc::clone(&shutdown);
 
     let (port_tx, port_rx) = crossbeam_channel::bounded::<u16>(1);
     let packet_rx_server = Arc::clone(&packet_rx);
-    let running_server = Arc::clone(&running);
+    let shutdown_server = Arc::clone(&shutdown);
 
     let server_thread = std::thread::spawn(move || {
         let listener = match TcpListener::bind("127.0.0.1:0") {
@@ -427,7 +476,7 @@ fn spawn_windows(
 
         let mut latest_json = String::from("null");
 
-        while running_server.load(Ordering::Relaxed) {
+        while !shutdown_server.is_shutdown() {
             if let Some(rx) = packet_rx_server.try_lock() {
                 while let Ok(pkt) = rx.try_recv() {
                     if let Ok(json) = serde_json::to_string(&pkt) {
@@ -447,7 +496,9 @@ fn spawn_windows(
                 let _ = stream.write_all(response.as_bytes());
             }
 
-            std::thread::sleep(std::time::Duration::from_millis(5));
+            if shutdown_server.wait(Duration::from_millis(5)) {
+                break;
+            }
         }
     });
 
@@ -455,7 +506,7 @@ fn spawn_windows(
         Ok(p) => p,
         Err(_) => {
             return Box::new(EditorHandle {
-                running: running_clone,
+                shutdown: shutdown_for_handle,
                 _webview: None,
                 _web_context: None,
                 _server_thread: Some(server_thread),
@@ -488,7 +539,7 @@ fn spawn_windows(
 
     // Create a writable WebView2 data directory to avoid E_ACCESSDENIED
     // when the DAW is installed in Program Files (read-only).
-    let data_dir = webview2_data_dir();
+    let data_dir = webview2_data_dir(&instance_id);
     let _ = std::fs::create_dir_all(&data_dir);
     let mut web_context = wry::WebContext::new(Some(data_dir));
 
@@ -517,7 +568,7 @@ fn spawn_windows(
         Err(e) => {
             eprintln!("[KickForge] failed to create WebView: {}", e);
             return Box::new(EditorHandle {
-                running: running_clone,
+                shutdown: shutdown_for_handle,
                 _webview: None,
                 _web_context: Some(web_context),
                 _server_thread: Some(server_thread),
@@ -527,7 +578,7 @@ fn spawn_windows(
     };
 
     Box::new(EditorHandle {
-        running: running_clone,
+        shutdown: shutdown_for_handle,
         _webview: Some(webview),
         _web_context: Some(web_context),
         _server_thread: Some(server_thread),
@@ -547,9 +598,11 @@ fn spawn_unix(
     context: Arc<dyn GuiContext>,
     param_map: Arc<HashMap<String, nih_plug::prelude::ParamPtr>>,
     init_js: String,
+    _instance_id: String,
 ) -> Box<dyn std::any::Any + Send> {
-    let running = Arc::new(AtomicBool::new(true));
-    let running_clone = Arc::clone(&running);
+    let shutdown = Arc::new(ShutdownSignal::new());
+    let shutdown_for_handle = Arc::clone(&shutdown);
+    let shutdown_thread = Arc::clone(&shutdown);
 
     let editor_thread = std::thread::spawn(move || {
         #[cfg(target_os = "linux")]
@@ -581,7 +634,7 @@ fn spawn_unix(
             }
         };
 
-        while running.load(Ordering::Relaxed) {
+        while !shutdown_thread.is_shutdown() {
             if let Some(rx) = packet_rx.try_lock() {
                 while let Ok(pkt) = rx.try_recv() {
                     if let Ok(json) = serde_json::to_string(&pkt) {
@@ -601,12 +654,14 @@ fn spawn_unix(
                 }
             }
 
-            std::thread::sleep(std::time::Duration::from_millis(16));
+            if shutdown_thread.wait(Duration::from_millis(16)) {
+                break;
+            }
         }
     });
 
     Box::new(EditorHandle {
-        running: running_clone,
+        shutdown: shutdown_for_handle,
         _webview: None,
         _web_context: None,
         _server_thread: None,
@@ -615,7 +670,7 @@ fn spawn_unix(
 }
 
 struct EditorHandle {
-    running: Arc<AtomicBool>,
+    shutdown: Arc<ShutdownSignal>,
     _webview: Option<wry::WebView>,
     _web_context: Option<wry::WebContext>,
     _server_thread: Option<std::thread::JoinHandle<()>>,
@@ -626,7 +681,10 @@ unsafe impl Send for EditorHandle {}
 
 impl Drop for EditorHandle {
     fn drop(&mut self) {
-        self.running.store(false, Ordering::Relaxed);
+        // Signal shutdown first → workers wake immediately. Then join.
+        // Both joins were already here; the new Condvar wakeup means they
+        // return in <1ms instead of the previous ≤8/16ms poll interval.
+        self.shutdown.signal();
         if let Some(handle) = self._server_thread.take() {
             let _ = handle.join();
         }
