@@ -47,6 +47,8 @@ fn crash_pending_path() -> std::path::PathBuf {
     hardwave_data_dir().join("kickforge-crash-pending")
 }
 
+mod crash_reporter;
+
 fn install_crash_handler() {
     use std::sync::Once;
     static INIT: Once = Once::new();
@@ -196,6 +198,7 @@ fn decay_coeff(sample_rate: f32, decay_ms: f32) -> f32 {
 impl Default for HardwaveKickForge {
     fn default() -> Self {
         install_crash_handler();
+        crash_reporter::install("kickforge");
 
         let sr = 44100.0;
         let (pkt_tx, pkt_rx) = bounded::<KickForgePacket>(4);
