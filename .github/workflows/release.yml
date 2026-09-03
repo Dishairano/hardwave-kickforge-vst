@@ -120,7 +120,8 @@ jobs:
 
   release:
     needs: [build-linux, build-windows, build-macos-x64, build-macos-arm64]
-    runs-on: ubuntu-latest
+    # macOS, not ubuntu: this job now runs lipo and codesign.
+    runs-on: macos-latest
     permissions:
       contents: write
 
@@ -149,23 +150,39 @@ jobs:
 
       - name: Create universal macOS zip
         run: |
-          mkdir -p universal-macos/hardwave-kickforge.vst3/Contents
-          # Extract arm64
-          cd artifacts/hardwave-kickforge-macos-arm64
-          unzip hardwave-kickforge-macos-arm64.zip
-          cd ../..
-          # Extract x64
-          cd artifacts/hardwave-kickforge-macos-x64
-          unzip hardwave-kickforge-macos-x64.zip
-          cd ../..
-          # Create universal binary using lipo (not available on Linux — fall back to arm64 as primary)
-          # Note: true universal binaries require lipo on macOS; this step bundles both zips.
-          # For a real universal binary, a dedicated macOS job would be needed.
-          # Ship both arch zips plus a combined universal zip with arm64 contents (most common target).
-          cp -r artifacts/hardwave-kickforge-macos-arm64/hardwave-kickforge.vst3 universal-macos/
-          cp -r artifacts/hardwave-kickforge-macos-arm64/hardwave-kickforge.clap universal-macos/
+          set -euo pipefail
+          # This step used to copy the arm64 build and name it "universal", so every
+          # Intel Mac silently failed to load the plug-in — hosts report that only as
+          # "failed to scan". lipo actually merges the two slices.
+          cd artifacts/hardwave-kickforge-macos-arm64 && unzip -o -q hardwave-kickforge-macos-arm64.zip && cd ../..
+          cd artifacts/hardwave-kickforge-macos-x64   && unzip -o -q hardwave-kickforge-macos-x64.zip   && cd ../..
+
+          rm -rf universal-macos && mkdir -p universal-macos
+          cp -R artifacts/hardwave-kickforge-macos-x64/hardwave-kickforge.vst3 universal-macos/
+          cp -R artifacts/hardwave-kickforge-macos-x64/hardwave-kickforge.clap universal-macos/
+
+          for K in vst3 clap; do
+            lipo -create \
+              artifacts/hardwave-kickforge-macos-x64/hardwave-kickforge.$K/Contents/MacOS/hardwave-kickforge \
+              artifacts/hardwave-kickforge-macos-arm64/hardwave-kickforge.$K/Contents/MacOS/hardwave-kickforge \
+              -output universal-macos/hardwave-kickforge.$K/Contents/MacOS/hardwave-kickforge
+            # lipo rewrites the binary and invalidates any signature; macOS will not
+            # load unsigned code into a host.
+            codesign --force --deep --sign - universal-macos/hardwave-kickforge.$K
+          done
+
+          # Fail loudly rather than shipping a thin binary called universal again.
+          for K in vst3 clap; do
+            A=$(lipo -archs universal-macos/hardwave-kickforge.$K/Contents/MacOS/hardwave-kickforge)
+            echo "hardwave-kickforge.$K -> $A"
+            case "$A" in
+              *x86_64*arm64*|*arm64*x86_64*) ;;
+              *) echo "::error::hardwave-kickforge.$K is not universal ($A)"; exit 1 ;;
+            esac
+          done
+
           cd universal-macos
-          zip -r hardwave-kickforge-macos-universal.zip hardwave-kickforge.vst3 hardwave-kickforge.clap
+          zip -r -q hardwave-kickforge-macos-universal.zip hardwave-kickforge.vst3 hardwave-kickforge.clap
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
