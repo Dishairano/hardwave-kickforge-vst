@@ -2,7 +2,7 @@
 
 ## v0.12.6
 
-Two faults found by the automated testers, not reported by anyone.
+Three faults found by the automated testers, not reported by anyone.
 
 - **KickForge did not load on Intel Macs.** The macOS build was labelled
   universal but held an Apple Silicon binary only. An Intel Mac reported this
