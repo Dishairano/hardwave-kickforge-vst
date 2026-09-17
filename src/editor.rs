@@ -352,7 +352,7 @@ fn snapshot_params(params: &KickForgeParams) -> KickForgePacket {
         waveform_buffer: Vec::new(),
         master_volume: params.master_volume.value(),
         master_tuning: params.master_tuning.value(),
-        master_octave: params.master_octave.value() as i32,
+        master_octave: params.master_octave.value(),
         master_limiter: params.master_limiter.value(),
         master_low: params.master_low.value(),
         master_mid: params.master_mid.value(),
@@ -589,6 +589,8 @@ fn spawn_windows(
 // ─── Linux / macOS: evaluate_script approach ────────────────────────────────
 
 #[cfg(not(target_os = "windows"))]
+// Each argument is a distinct piece of window state the platform thread needs.
+#[allow(clippy::too_many_arguments)]
 fn spawn_unix(
     raw_handle: usize,
     url: String,
@@ -618,7 +620,7 @@ fn spawn_unix(
             .with_url(&url)
             .with_initialization_script(&init_js)
             .with_ipc_handler(move |msg| {
-                handle_ipc(&ctx, &pmap, &msg.body());
+                handle_ipc(&ctx, &pmap, msg.body());
             })
             .with_bounds(wry::Rect {
                 position: wry::dpi::Position::Logical(wry::dpi::LogicalPosition::new(0.0, 0.0)),

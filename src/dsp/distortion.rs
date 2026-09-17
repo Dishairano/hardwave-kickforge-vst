@@ -54,6 +54,8 @@ impl Distortion {
     }
 
     /// Set post-distortion output gain (0.0 .. 1.0).
+    /// Unused: the voice sets post gain through the parameter path instead.
+    #[allow(dead_code)]
     pub fn set_post_gain(&mut self, gain: f32) {
         self.post_gain = gain.clamp(0.0, 2.0);
     }

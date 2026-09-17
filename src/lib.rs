@@ -86,7 +86,7 @@ fn install_crash_handler() {
                 let _ = writeln!(f, "Arch:     {}", std::env::consts::ARCH);
                 let _ = writeln!(f, "Location: {}", location);
                 let _ = writeln!(f, "Message:  {}", payload);
-                let _ = writeln!(f, "");
+                let _ = writeln!(f);
                 let _ = writeln!(f, "Backtrace:");
                 let _ = writeln!(f, "{}", bt);
                 let _ = writeln!(f, "========================================");
@@ -752,7 +752,7 @@ impl Plugin for HardwaveKickForge {
                 waveform_buffer: self.waveform_buf.clone(),
                 master_volume: master_vol,
                 master_tuning,
-                master_octave: master_octave as i32,
+                master_octave,
                 master_limiter: limiter_on,
                 master_low: eq_low_db,
                 master_mid: eq_mid_db,

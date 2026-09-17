@@ -111,6 +111,9 @@ impl SoftLimiter {
         scaled.tanh() * self.ceiling
     }
 
+    /// Nothing calls this: the limiter holds no state to clear. Kept so every
+    /// DSP block answers `reset` the same way.
+    #[allow(dead_code)]
     pub fn reset(&self) {
         // Stateless
     }

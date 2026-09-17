@@ -1,3 +1,10 @@
+//! NOTE: nothing in Rust calls this module. The WebView UI carries its own
+//! preset list and applies values through `setParam`, as the doc comment below
+//! says, so these definitions exist for a Rust-side preset API that was never
+//! wired up. Kept because the values are the tuned ones; silenced here rather
+//! than crate-wide.
+#![allow(dead_code)]
+
 //! Factory presets for KickForge.
 //!
 //! Each preset is a collection of param_id -> f64 value pairs.

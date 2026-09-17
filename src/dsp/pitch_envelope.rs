@@ -126,8 +126,8 @@ impl PitchEnvelope {
             PitchCurve::Logarithmic => {
                 // Logarithmic: slow start, fast end
                 let k = 5.0_f32;
-                let raw = (1.0 + t * (k.exp() - 1.0)).ln() / k;
-                raw
+                
+                (1.0 + t * (k.exp() - 1.0)).ln() / k
             }
             PitchCurve::Linear => {
                 // Linear: constant rate

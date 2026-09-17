@@ -1,3 +1,7 @@
+//! Filter toolbox. Some of these (the one-pole, the shelving setters) are not
+//! used by the current voice and are kept as building blocks for the next one.
+#![allow(dead_code)]
+
 //! State-variable filter (SVF) for kick tone shaping.
 //!
 //! Implements a Chamberlin SVF with LowPass, HighPass, BandPass, and Notch modes.
