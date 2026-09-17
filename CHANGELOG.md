@@ -12,3 +12,7 @@ Two faults found by the automated testers, not reported by anyone.
   or foreign state made the plug-in ask for an impossible amount of memory,
   and the failed request killed the host process rather than the plug-in. It
   now refuses the state and carries on.
+- **Your settings came back, but the DAW did not know.** Reopening a project
+  restored every control inside KickForge, and the plug-in never told the host
+  to re-read them. A host that trusts its own copy showed and automated the old
+  values, so a project could sound different from what the controls said.
